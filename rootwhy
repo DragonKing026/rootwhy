@@ -316,16 +316,30 @@ def parse_man(text: str) -> tuple[str, dict[str, tuple[bool, str]]]:
     return summary, options
 
 
+SYSTEM_MAN_DIRS = ("/usr/share/man", "/usr/local/share/man")
+
+
+def _system_man_dirs() -> list[str]:
+    """Man directories nobody but root can change (the directory and every parent)."""
+    return [d for d in SYSTEM_MAN_DIRS if os.path.isdir(d) and not _unsafe_for_root(d)]
+
+
 def man_info(cmd: str) -> tuple[str, dict[str, tuple[bool, str]]]:
     """Summary and options from `man` (never runs the command itself). Cached; empty when unavailable."""
     if cmd in _MAN_CACHE:
         return _MAN_CACHE[cmd]
     result: tuple[str, dict[str, tuple[bool, str]]] = ("", {})
-    if re.fullmatch(r"[\w.+-]+", cmd) and shutil.which("man"):
+    man = shutil.which("man", path=SECURE_PATH)
+    dirs = _system_man_dirs()
+    if re.fullmatch(r"[\w.+-]+", cmd) and man and dirs:
+        # only root-owned system pages, clean environment: the requester runs as this user and could otherwise plant a
+        # page (~/.local/share/man, ~/.manpath, MANPATH…) that describes `rm -rf` as harmless
+        env = {k: v for k, v in os.environ.items() if k in ("LANG", "LANGUAGE") or k.startswith("LC_")}
+        env.update(PATH=SECURE_PATH, HOME="/nonexistent", MANWIDTH="400", MANPAGER="cat", PAGER="cat")
         try:
-            out = subprocess.run(["man", "-P", "cat", "--", cmd], check=False, capture_output=True, text=True, timeout=4,
-                                 env={**os.environ, "MANWIDTH": "400", "MAN_KEEP_FORMATTING": "", "MANPAGER": "cat"},
-                                 stdin=subprocess.DEVNULL)
+            out = subprocess.run([man, "-C", "/etc/man_db.conf", "-M", ":".join(dirs), "-P", "cat", "--", cmd],
+                                 check=False, capture_output=True, text=True, timeout=4, env=env,
+                                 stdin=subprocess.DEVNULL, cwd="/")
             if out.returncode == 0:
                 result = parse_man(out.stdout)
         except (OSError, subprocess.SubprocessError):

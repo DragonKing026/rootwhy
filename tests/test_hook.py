@@ -19,13 +19,22 @@ class Hook(unittest.TestCase):
     def test_blocks_command_words(self):
         for cmd in ("sudo dnf install htop", "cd /tmp && sudo rm x", "ls | sudo tee /etc/x", "FOO=1 sudo true",
                     "/usr/bin/sudo -k true", "pkexec true", "echo $(sudo cat /etc/shadow)", "nohup sudo true &",
-                    "doas true", "su -c id", "run0 true", "x=1\nsudo true"):
+                    "doas true", "su -c id", "run0 true", "x=1\nsudo true",
+                    "'sudo' true", "s\\udo true", '"/usr/bin/sudo" true', "find . | xargs sudo rm",
+                    "timeout 5 sudo true", 'bash -c "sudo true"', "sh -c 'cd / && sudo ls'", 'eval "sudo true"',
+                    "`sudo true`", "{ sudo true; }", "if true; then sudo true; fi",
+                    "cat <<EOF\nx\nEOF\nsudo true",                 # body ended, next line runs
+                    "cat <<EOF\n EOF\nEOF\nsudo true",              # ' EOF' does not end it, 'EOF' does
+                    "echo 'unbalanced; sudo true"):                  # cannot parse → fail closed
+
             self.assertEqual(run(cmd), 2, cmd)
 
     def test_allows_mentions(self):
         for cmd in ('git commit -m "never call sudo directly"', "grep -rn sudo README.md", "rootwhy -r 'Why x.' -- dnf up",
                     "cat <<EOF > notes.txt\nsudo is blocked\nEOF\necho ok", "man sudo", "echo 'a; sudo b'",
-                    "jako-root -o 'Opis zmiany.' true", "pseudo-cmd", "visudo -c"):
+                    "jako-root -o 'Opis zmiany.' true", "pseudo-cmd", "visudo -c",
+                    "cat <<'EOF'\nsudo true\nEOF", "cat <<-EOF\n\tsudo x\n\tEOF\necho ok",
+                    "xargs echo sudo-free", "bash -c 'echo hi'", "echo \"$(date)\" # sudo later"):
             self.assertEqual(run(cmd), 0, cmd)
 
     def test_bad_input_passes(self):
