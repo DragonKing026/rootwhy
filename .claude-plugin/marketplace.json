@@ -1,0 +1,16 @@
+{
+  "name": "rootwhy",
+  "owner": {
+    "name": "DragonKing026"
+  },
+  "metadata": {
+    "description": "rootwhy — sudo with a password dialog that shows why and what each part of the command does."
+  },
+  "plugins": [
+    {
+      "name": "rootwhy",
+      "source": "./",
+      "description": "Root commands through the rootwhy password dialog (skill + hook that stops bare sudo)."
+    }
+  ]
+}

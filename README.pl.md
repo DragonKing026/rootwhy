@@ -2,7 +2,7 @@
 
 # rootwhy
 
-**sudo z okienkiem na hasło, które mówi _po co_ — i wyjaśnia każdy fragment polecenia.**
+**sudo z okienkiem na hasło, które mówi _po co_ — i pokazuje, co robi każdy fragment polecenia.**
 
 [English](README.md)
 
@@ -11,17 +11,20 @@ rozszyfrowania. `rootwhy` pokazuje okienko z:
 
 - **powodem**, napisanym przez proszącego (np. agenta),
 - **poleceniem podzielonym na wiersze i pokolorowanym** — polecenie, opcje, wartości, ścieżki,
-- **wyjaśnieniem każdego fragmentu po najechaniu**: co deklaruje proszący, wbudowany opis prostym językiem, fakty
-  sprawdzone w tej chwili (czy plik istnieje, kto jest właścicielem, prawa, rozmiar, czy cel zostanie nadpisany)
-  i opis opcji z `man`,
-- katalogiem roboczym i łańcuchem procesów, które proszą.
+- **po najechaniu: co robi każdy fragment — z podręcznika Twojego systemu** (`man`, po polsku, jeśli jest
+  tłumaczenie), a do tego ostrzeżenie ⚠, gdy coś wymaga uwagi: plik docelowy zostanie zastąpiony, program lub skrypt
+  może zmienić ktoś poza rootem, ścieżka nie istnieje, tryb setuid, nieznany użytkownik,
+- katalogiem roboczym i programami, przez które przyszła prośba (np. `code → claude → zsh`).
+
+Nic nie jest wymyślone: rootwhy nie ma własnej tabeli opisów i nie bierze wyjaśnień od proszącego. Fragment, o którym
+system nic nie wie, po prostu nie ma dymka.
 
 Hasło idzie z okienka prosto do `sudo`. Proszący go nie widzi.
 
 ![okienko rootwhy](docs/dialog-pl.png)
 
-Najechanie na `755` pokazuje np. *prawa rwxr-xr-x: właściciel odczyt, zapis, uruchamianie; grupa odczyt,
-uruchamianie; pozostali odczyt, uruchamianie*, a na cel — czy istnieje i czym jest `/usr/local/bin`.
+Najechanie na `-m` pokazuje np. *set permission mode (as in chmod), instead of rwxr-xr-x* — tekst z `man install`.
+Najechanie na cel pokazuje *⚠ plik istnieje — zostanie zastąpiony*, jeśli tak jest.
 
 ## Użycie
 
@@ -29,28 +32,33 @@ uruchamianie; pozostali odczyt, uruchamianie*, a na cel — czy istnieje i czym 
 rootwhy -r "Restart Ollamy po zmianie pliku usługi." systemctl restart ollama
 
 rootwhy -r "Instalacja nocnego skryptu kopii dla całego systemu, żeby timer mógł go uruchamiać jako root." \
-        -e "755=skrypt musi być wykonywalny" \
-        -e "nightly-backup.sh=nowa wersja z poprawioną ścieżką" \
         -- install -m 755 -o root -g root ./build/nightly-backup.sh /usr/local/bin/nightly-backup.sh
 ```
 
 | Opcja | |
 | --- | --- |
 | `-r, --reason TEKST` | po co jest polecenie, 10–300 znaków (wymagane) |
-| `-e, --explain FRAGMENT=TEKST` | wyjaśnienie po najechaniu na pasujący fragment; można powtarzać. Pasuje do całego argumentu, nazwy opcji albo końca ścieżki. Wyjaśnienia bez dopasowania są wypisane pod poleceniem |
 | `--log-dir KATALOG` | katalog dziennika (domyślnie `$XDG_STATE_HOME/rootwhy`, czyli `~/.local/state/rootwhy`; także `ROOTWHY_LOG_DIR`) |
 | `--preview` | tylko pokaż okienko, niczego nie uruchamiaj |
 
 Kod wyjścia: kod polecenia, `130` po anulowaniu, `2` przy złym użyciu. Po błędnym haśle `sudo` pyta ponownie
 (do 3 razy), a okienko o tym mówi.
 
-### Dla agentów AI
+### Dla agentów AI — wtyczka Claude Code
 
-Każ agentowi używać `rootwhy` zamiast `sudo`, np. w `CLAUDE.md` / `AGENTS.md`:
+Repozytorium jest też wtyczką Claude Code: **skill**, który mówi agentowi, kiedy i jak używać rootwhy, oraz **hook**,
+który zatrzymuje `sudo`, `pkexec`, `doas`, `run0` i `su` wywołane wprost i odsyła do rootwhy.
+
+```text
+/plugin marketplace add DragonKing026/rootwhy
+/plugin install rootwhy@rootwhy
+```
+
+Wtyczka nie instaluje programu — zrób to najpierw (Instalacja). Dla innych agentów ta sama reguła w `AGENTS.md`:
 
 ```markdown
-Polecenia wymagające roota — tylko przez `rootwhy -r "Co i po co, 1–2 zdania." [-e FRAGMENT=PO_CO …] -- polecenie …`,
-nigdy `sudo` wprost. Uprzedź użytkownika, że pojawi się okienko z hasłem. Kod 130 = anulował — nie ponawiaj bez pytania.
+Polecenia wymagające roota — tylko przez `rootwhy -r "Co i po co, 1–2 zdania." -- polecenie …`, nigdy `sudo`
+wprost. Uprzedź użytkownika, że pojawi się okienko z hasłem. Kod 130 = anulował — nie ponawiaj bez pytania.
 ```
 
 ## Bezpieczeństwo
@@ -67,13 +75,12 @@ nigdy `sudo` wprost. Uprzedź użytkownika, że pojawi się okienko z hasłem. K
   np. `$'\u202e'`.
 - **Czysty proces okienka.** Python działa z `-I`, a okienko zachowuje tylko zmienne ekranu, sesji i języka:
   `PYTHONPATH`, `GIO_EXTRA_MODULES`, `GTK_*`, `QT_PLUGIN_PATH` itp. nie wczytają obcego kodu do procesu z hasłem.
-- **Nic nie działa przed zgodą.** Wyjaśnienia pochodzą z wbudowanej tabeli, `man` (nie uruchamia polecenia), `stat`
-  ścieżek i `systemctl show` (opis jednostki).
-- **Deklaracje są oznaczone.** Powód i teksty `-e` pochodzą od proszącego; w dymku mają nagłówek *Wyjaśnienie od
-  proszącego (rootwhy tego nie sprawdza)*, a fakty sprawdzone przez rootwhy — *Stan teraz (sprawdził rootwhy)*.
-  Nieuczciwy proszący może skłamać w powodzie — zatwierdzasz samo polecenie.
+- **Nic nie działa przed zgodą.** Opisy pochodzą tylko z `man` (nie uruchamia polecenia — `--help` nigdy nie jest
+  wywoływane), a ostrzeżenia ze `stat` ścieżek.
+- **Proszący nie wpisze nic do dymków.** Od proszącego pochodzi tylko powód. Nieuczciwy proszący może skłamać
+  w powodzie — zatwierdzasz samo polecenie.
 - **Program pokazany z nazwy** (`ls`) tylko wtedy, gdy `sudo` znajdzie po tej nazwie ten sam plik i jest on bezpieczny;
-  inaczej pełna ścieżka. Ścieżka, która się uruchomi (i cel dowiązania), jest zawsze w dymku.
+  inaczej pełna ścieżka i ostrzeżenie.
 - **Dziennik bez haseł:** data, powód, polecenie i kod wyjścia, po jednym wierszu, zapisany przed otwarciem okienka.
 
 Ograniczenia: `rootwhy` nie wie, co zrobi skrypt po uruchomieniu — tylko jaki to plik i kto może go zmienić (ostrzega,
@@ -103,13 +110,14 @@ z dziennikiem).
 
 ## Język
 
-Interfejs według `LANG` / `LC_MESSAGES`: polski dla `pl_*`, w pozostałych angielski. Wymuszenie: `ROOTWHY_LANG=en`
-albo `ROOTWHY_LANG=pl`. Opisy z `man` są w języku zainstalowanych stron man.
+Kilka stałych napisów okienka (przyciski, ostrzeżenia) według `LANG` / `LC_MESSAGES`: polski dla `pl_*`, w pozostałych
+angielski; wymuszenie `ROOTWHY_LANG=en` albo `ROOTWHY_LANG=pl`. Opisy są w języku zainstalowanych stron man — po
+polsku po instalacji tłumaczeń z dystrybucji (np. `man-pages-pl`).
 
 ## Rozwój
 
 ```bash
-python3 -m unittest discover tests        # model polecenia, wyjaśnienia, tłumaczenia (bez GTK i sudo)
+python3 -m unittest discover tests        # model polecenia, odczyt man, ostrzeżenia, tłumaczenia (bez GTK i sudo)
 ./rootwhy --preview -r "Test okienka." -- install -m 644 a /etc/b
 ./rootwhy --screenshot out.png -r "Test okienka." -- systemctl restart foo   # okno do pliku PNG
 ROOTWHY_GTK=3 ./rootwhy --preview -r "Test GTK 3." -- true                  # wymuszenie okienka GTK 3
@@ -118,6 +126,7 @@ ROOTWHY_GTK=3 ./rootwhy --preview -r "Test GTK 3." -- true                  # wy
 Logo jest wbudowane w program (`LOGO_SVG`, test pilnuje zgodności z `logo.svg`), więc wydanie to jeden plik.
 
 Program jest celowo jednym plikiem — dostaje Twoje hasło, więc powinno się go dać przeczytać za jednym posiedzeniem.
+Testy i `ruff` uruchamiają się przy każdym pushu (`.github/workflows/test.yml`).
 
 ## Licencja
 

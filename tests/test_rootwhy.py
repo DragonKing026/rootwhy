@@ -1,7 +1,9 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Tests of the command model and explanations (no GTK, no sudo). Run: python3 -m unittest discover tests"""
+import contextlib
 import importlib.machinery
 import importlib.util
+import io
 import os
 import sys
 import tempfile
@@ -56,10 +58,9 @@ class Tokenize(unittest.TestCase):
         self.assertEqual(kinds[:3], [("command", "install"), ("option", "-m"), ("value", "755")])
         self.assertEqual(kinds[-2:], [("path", INSTALL[-2]), ("path", INSTALL[-1])])
 
-    def test_roles_source_destination(self):
+    def test_role_destination(self):
         toks = rw.tokenize(INSTALL)
-        self.assertEqual(toks[-2].role, "source")
-        self.assertEqual(toks[-1].role, "destination")
+        self.assertEqual((toks[-2].role, toks[-1].role), ("", "destination"))
 
     def test_long_option_with_equals(self):
         toks = rw.tokenize(["install", "--mode=644", "a", "b"])
@@ -74,12 +75,10 @@ class Tokenize(unittest.TestCase):
     def test_subcommand(self):
         toks = rw.tokenize(["systemctl", "restart", "ollama"])
         self.assertEqual([t.kind for t in toks], ["command", "subcommand", "arg"])
-        self.assertEqual(toks[2].role, "systemd unit")
 
     def test_end_of_options(self):
         toks = rw.tokenize(["rm", "--", "-weird"])
         self.assertEqual([t.kind for t in toks], ["command", "marker", "arg"])
-        self.assertEqual(toks[2].role, "will be deleted")
 
     def test_value_options_from_man(self):
         toks = rw.tokenize(["foo", "-x", "val"], {"foo": {"-x"}})
@@ -109,72 +108,60 @@ class Man(unittest.TestCase):
         self.assertIn("like --backup", opts["-b"][1])
         self.assertTrue(opts["-t"][0])
 
+    def test_subcommand_entries_and_first_sentence(self):
+        _summary, opts = rw.parse_man("""COMMANDS
+       start PATTERN...
+           Start (activate) one or more units specified on the command line. Note that unit
+           names are matched.
+
+       Paragraph text at the same indent
+       continues here.
+""")
+        self.assertEqual(opts["start"][1], "Start (activate) one or more units specified on the command line")
+        self.assertNotIn("Paragraph", opts)
+
     def test_overstrike_removed(self):
         summary, _ = rw.parse_man("NAME\n       f\bfo\boo - does f\bfoo\n")
         self.assertEqual(summary, "does foo")
 
 
 class Explain(unittest.TestCase):
-    def test_mode(self):
-        text = rw.describe_mode("755")
-        self.assertIn("rwxr-xr-x", text)
-        self.assertIn("owner — read, write, execute; group — read, execute", text)
-
-    def test_directory_permissions_in_words(self):
-        self.assertIn("others — read, enter (rwxr-xr-x)", rw.describe_permissions(0o755, directory=True))
-        facts = rw.path_facts("/")
-        self.assertTrue(any(x.startswith("permissions: ") for x in facts))
+    def test_only_system_sources(self):
+        rw._MAN_CACHE["fakecmd"] = ("does fake things", {"-l": (False, "long format"), "-a": (False, "all files")})
+        toks = rw.tokenize(["fakecmd", "-la", "plain"])
+        rw.explain(toks, use_system=True)
+        self.assertEqual(toks[0].notes[0], "does fake things")
+        self.assertEqual(toks[1].notes, ["-l  long format", "-a  all files"])
+        self.assertEqual(toks[2].notes, [])                 # the system knows nothing → no tooltip
+        self.assertEqual(rw.tooltip_markup(toks[2]), "")
 
     def test_command_shown_as_typed(self):
         ls = rw.shutil.which("ls", path=rw.SECURE_PATH)
         if ls and not rw._unsafe_for_root(ls):
             self.assertEqual(rw.tokenize([ls, "-la"])[0].shown, "ls")
         self.assertEqual(rw.tokenize(["/no/such/ls"])[0].shown, "/no/such/ls")
-        self.assertIn("setuid", rw.describe_mode("4755"))
-        self.assertIsNone(rw.describe_mode("u+x"))
 
-    def test_owner(self):
-        self.assertIn("UID 0", rw.describe_owner("root"))
-        self.assertEqual(rw.describe_owner("no-such-user-xyz"), "unknown user or group")
+    def test_mode_and_owner_warnings(self):
+        self.assertIn("setuid", rw.mode_warning("4755"))
+        self.assertIsNone(rw.mode_warning("755"))
+        self.assertIsNone(rw.mode_warning("u+x"))
+        self.assertIsNone(rw.owner_warning("root:root"))
+        self.assertIn("no such user", rw.owner_warning("no-such-user-xyz"))
 
-    def test_agent_explanations_match_and_leftovers(self):
-        toks = rw.tokenize(INSTALL)
-        left = rw.explain(toks, {"kod-po/nocne.sh": "new version", "755": "executable", "zzz": "unused"},
-                          use_system=False)
-        notes = {t.arg: [x for s, x in t.notes if s == "agent"] for t in toks}
-        self.assertEqual(notes[INSTALL[-2]], ["new version"])
-        self.assertEqual(notes["755"], ["executable"])
-        self.assertEqual(left, ["unused"])
-
-    def test_builtin_option_and_combined_flags(self):
-        toks = rw.tokenize(["rm", "-rf", "/tmp/x"])
-        rw.explain(toks, use_system=False)
-        builtin = next(x for s, x in toks[1].notes if s == "builtin")
-        self.assertIn("delete directories", builtin)
-        self.assertIn("never ask", builtin)
-
-    def test_path_facts(self):
+    def test_path_warnings(self):
         with tempfile.TemporaryDirectory() as d:
             f = Path(d, "f.txt")
             f.write_text("x")
-            self.assertIn("file", rw.path_facts(str(f))[0])
-            self.assertEqual(rw.path_facts(str(Path(d, "new")))[0], "does not exist yet (will be created)")
-
-    def test_destination_warning(self):
-        with tempfile.TemporaryDirectory() as d:
-            src, dst = Path(d, "a"), Path(d, "b")
-            src.write_text("1")
-            dst.write_text("2")
-            toks = rw.tokenize(["cp", str(src), str(dst)])
-            rw.explain(toks)
-            self.assertTrue(any("will be replaced" in x for _, x in toks[-1].notes))
+            self.assertEqual(rw.path_warnings(str(f)), [])                         # exists, nothing to say
+            self.assertIn("will be replaced", rw.path_warnings(str(f), role="destination")[0])
+            self.assertEqual(rw.path_warnings(str(Path(d, "new")), role="destination"),
+                             ["does not exist yet (will be created)"])
+            self.assertEqual(rw.path_warnings(str(Path(d, "new"))), ["⚠ does not exist"])
+            self.assertIn("could be changed", rw.path_warnings(str(f), role="script")[0])
 
     def test_tooltip_escapes_markup(self):
-        toks = rw.tokenize(["echo", "<b>"])
-        rw.explain(toks, {"<b>": "a & b"}, use_system=False)
-        markup = rw.tooltip_markup(toks[1])
-        self.assertIn("a &amp; b", markup)
-        self.assertNotIn("<b>a", markup)
+        t = rw.Token("x", "arg", "x", notes=["a & <b>"])
+        self.assertEqual(rw.tooltip_markup(t), "a &amp; &lt;b&gt;")
 
 
 class Polish(unittest.TestCase):
@@ -183,7 +170,7 @@ class Polish(unittest.TestCase):
         try:
             rw.LANG = "pl"
             self.assertEqual(rw._("Cancel"), "Anuluj")
-            self.assertIn("właściciel", rw.describe_mode("644"))
+            self.assertIn("zastąpiony", rw._("⚠ an existing file — it will be replaced"))
         finally:
             rw.LANG = old
 
@@ -244,8 +231,9 @@ class Cli(unittest.TestCase):
     def test_reason_required(self):
         self.assertEqual(rw.main_mode(["true"]), 2)
 
-    def test_bad_explain(self):
-        self.assertEqual(rw.main_mode(["-r", "a valid reason here", "-e", "noequals", "true"]), 2)
+    def test_explain_option_removed(self):  # 2.0: descriptions come only from the system
+        with self.assertRaises(SystemExit), contextlib.redirect_stderr(io.StringIO()):
+            rw.main_mode(["-r", "a valid reason here", "-e", "true=x", "true"])
 
     def test_unknown_command(self):
         os.environ.setdefault("DISPLAY", ":0")

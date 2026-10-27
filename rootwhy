@@ -3,7 +3,7 @@
 # rootwhy — run a command with sudo after a password dialog that explains why and what it does.
 # https://github.com/DragonKing026/rootwhy
 """rootwhy: sudo with a password dialog that shows the reason, the command split into coloured parts and
-an explanation of every part on hover.
+the description of every part from the system's man pages on hover.
 
 Two modes in one file:
   * main mode   — parses arguments, writes the log, runs `sudo -k -A -- command…` with this file as SUDO_ASKPASS;
@@ -15,7 +15,6 @@ from __future__ import annotations
 import argparse
 import datetime as _dt
 import grp
-import json
 import os
 import pwd
 import re
@@ -28,10 +27,9 @@ import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 
-VERSION = "1.0.1"
+VERSION = "2.0.0"
 SECURE_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"  # sudo's default secure_path
 REASON_MIN, REASON_MAX = 10, 300
-EXPLAIN_MAX = 300
 ONE_LINE_MAX = 70  # commands up to this many characters stay on one line
 
 
@@ -49,71 +47,27 @@ LANG = _lang()
 
 PL = {
     "Administrator access": "Uprawnienia administratora",
-    "Command (hover over a part for an explanation):": "Polecenie (najedź na fragment, żeby zobaczyć wyjaśnienie):",
+    "Command (hover over a part for its description from the system's manual):":
+        "Polecenie (najedź na fragment, żeby zobaczyć opis z podręcznika systemu):",
     "Password:": "Hasło:",
     "Cancel": "Anuluj",
     "Authorize": "Zatwierdź",
-    "Close": "Zamknij",
     "Wrong password — try again (attempt {n}).": "Błędne hasło — spróbuj ponownie (próba {n}).",
     "Working directory: {d}": "Katalog roboczy: {d}",
     "Requested via: {c} (the programs the request came through)": "Kto prosi: {c} (programy, przez które przyszła prośba)",
     "Preview — nothing will run.": "Podgląd — nic się nie wykona.",
-    "Other notes from the requester:": "Inne uwagi proszącego:",
-    "Explanation from the requester": "Wyjaśnienie od proszącego",
-    "rootwhy does not check it": "rootwhy tego nie sprawdza",
-    "What it is": "Co to jest",
-    "Current state (checked by rootwhy)": "Stan teraz (sprawdził rootwhy)",
-    "Built-in": "Wbudowane",
-    "command": "polecenie",
-    "subcommand": "podpolecenie",
-    "option": "opcja",
-    "value of {o}": "wartość {o}",
-    "argument": "argument",
-    "path to a file or directory": "ścieżka do pliku lub katalogu",
-    "directory": "katalog",
-    "file": "plik",
-    "symlink → {t}": "dowiązanie → {t}",
-    "special file": "plik specjalny",
     "does not exist yet (will be created)": "jeszcze nie istnieje (zostanie utworzony)",
-    "does not exist, and neither does its parent directory": "nie istnieje, nie ma też katalogu nadrzędnego",
-    "cannot be checked (no permission)": "nie da się sprawdzić (brak uprawnień)",
-    "owner {o}, group {g}": "właściciel {o}, grupa {g}",
-    "root will run {p}": "root uruchomi {p}",
-    "(the file {f})": "(to plik {f})",
-    "not found in sudo's PATH": "nie ma w PATH sudo",
+    "⚠ does not exist": "⚠ nie istnieje",
+    "⚠ does not exist, and neither does its parent directory": "⚠ nie istnieje, nie ma też katalogu nadrzędnego",
+    "⚠ not found in sudo's PATH": "⚠ nie ma go w PATH sudo",
     "⚠ not owned by root or writable by others — could be changed before it runs":
         "⚠ właścicielem nie jest root albo inni mogą go zmieniać — może zostać podmieniony przed uruchomieniem",
     "⚠ an existing file — it will be replaced": "⚠ plik istnieje — zostanie zastąpiony",
-    "files will be placed in this directory": "pliki trafią do tego katalogu",
-    "source": "źródło",
-    "destination": "cel",
-    "link target (what the link points to)": "cel dowiązania (na co ma wskazywać)",
-    "name of the link to create": "nazwa tworzonego dowiązania",
-    "will be deleted": "zostanie usunięte",
-    "script that will run as root": "skrypt, który wykona się jako root",
-    "package": "pakiet",
-    "systemd unit": "jednostka systemd",
-    "unit: {d}": "jednostka: {d}",
-    "user {u} (UID {i})": "użytkownik {u} (UID {i})",
-    "group {g} (GID {i})": "grupa {g} (GID {i})",
-    "unknown user or group": "nieznany użytkownik lub grupa",
-    "permissions: owner — {o}; group — {g}; others — {x} ({r})": "prawa: właściciel — {o}; grupa — {g}; pozostali — {x} ({r})",
-    "read": "odczyt", "write": "zapis", "execute": "uruchamianie", "enter": "wejście", "nothing": "nic",
+    "⚠ no such user or group on this system": "⚠ nie ma takiego użytkownika lub grupy w tym systemie",
     "⚠ setuid/setgid bit — runs with the owner's rights": "⚠ bit setuid/setgid — uruchamia się z prawami właściciela",
-    "end of options — everything after is an argument": "koniec opcji — dalej same argumenty",
-    "system configuration": "konfiguracja systemu",
-    "programs installed locally for all users": "programy zainstalowane lokalnie dla wszystkich użytkowników",
-    "system files managed by the package manager": "pliki systemu zarządzane przez menedżer pakietów",
-    "boot files (kernel, bootloader)": "pliki rozruchu (jądro, bootloader)",
-    "systemd units and configuration": "jednostki i konfiguracja systemd",
-    "temporary files": "pliki tymczasowe",
-    "in your home directory": "w Twoim katalogu domowym",
-    "optional software": "dodatkowe oprogramowanie",
-    "variable data (logs, caches, databases)": "dane zmienne (logi, cache, bazy)",
     "rootwhy: reason (-r) is required, {a}–{b} characters": "rootwhy: powód (-r) jest wymagany, {a}–{b} znaków",
     "rootwhy: no command given": "rootwhy: brak polecenia",
     "rootwhy: no graphical session for the dialog": "rootwhy: brak sesji graficznej na okienko",
-    "rootwhy: bad --explain, expected FRAGMENT=TEXT: {e}": "rootwhy: złe --explain, oczekiwano FRAGMENT=TEKST: {e}",
     "rootwhy: cancelled by the user": "rootwhy: anulowane przez użytkownika",
     "rootwhy: askpass mode is only for sudo -A": "rootwhy: tryb hasła tylko dla sudo -A",
     "rootwhy: command not found: {c}": "rootwhy: nie ma polecenia: {c}",
@@ -130,230 +84,24 @@ def L(en: str, pl: str) -> str:
     return pl if LANG == "pl" else en
 
 
-# ── built-in knowledge (short, plain-language) ──────────────────────────────────────────────────────────────
+# ── command structure (no descriptions: those come from the system's man pages) ───────────────────────────
 
-COMMANDS = {
-    "install": ("copies files and sets their permissions and owner", "kopiuje pliki i ustawia im prawa i właściciela"),
-    "cp": ("copies files", "kopiuje pliki"),
-    "mv": ("moves or renames files", "przenosi albo zmienia nazwę plików"),
-    "rm": ("deletes files", "usuwa pliki"),
-    "ln": ("creates links between files", "tworzy dowiązania"),
-    "mkdir": ("creates directories", "tworzy katalogi"),
-    "rmdir": ("removes empty directories", "usuwa puste katalogi"),
-    "chmod": ("changes permissions", "zmienia prawa dostępu"),
-    "chown": ("changes owner and group", "zmienia właściciela i grupę"),
-    "chgrp": ("changes group", "zmienia grupę"),
-    "touch": ("creates a file or updates its time", "tworzy plik albo zmienia jego czas"),
-    "tee": ("writes its input to files", "zapisuje wejście do plików"),
-    "cat": ("prints file contents", "wypisuje zawartość plików"),
-    "sed": ("edits text (with -i: files in place)", "edytuje tekst (z -i: pliki na miejscu)"),
-    "systemctl": ("controls systemd services", "steruje usługami systemd"),
-    "journalctl": ("reads the system log", "czyta dziennik systemowy"),
-    "dnf": ("package manager (Fedora)", "menedżer pakietów (Fedora)"),
-    "dnf5": ("package manager (Fedora)", "menedżer pakietów (Fedora)"),
-    "apt": ("package manager (Debian, Ubuntu)", "menedżer pakietów (Debian, Ubuntu)"),
-    "apt-get": ("package manager (Debian, Ubuntu)", "menedżer pakietów (Debian, Ubuntu)"),
-    "rpm": ("low-level RPM package tool", "niskopoziomowe narzędzie pakietów RPM"),
-    "dpkg": ("low-level Debian package tool", "niskopoziomowe narzędzie pakietów Debiana"),
-    "flatpak": ("Flatpak application manager", "menedżer aplikacji Flatpak"),
-    "snap": ("Snap package manager", "menedżer pakietów Snap"),
-    "bash": ("runs a Bash script or command", "uruchamia skrypt albo polecenie Bash"),
-    "sh": ("runs a shell script or command", "uruchamia skrypt albo polecenie powłoki"),
-    "env": ("runs a command with changed environment", "uruchamia polecenie ze zmienionym środowiskiem"),
-    "mount": ("mounts a filesystem", "montuje system plików"),
-    "umount": ("unmounts a filesystem", "odmontowuje system plików"),
-    "usermod": ("changes a user account", "zmienia konto użytkownika"),
-    "useradd": ("creates a user account", "tworzy konto użytkownika"),
-    "groupadd": ("creates a group", "tworzy grupę"),
-    "passwd": ("changes a password", "zmienia hasło"),
-    "modprobe": ("loads or removes a kernel module", "ładuje albo usuwa moduł jądra"),
-    "sysctl": ("reads or sets kernel parameters", "czyta albo ustawia parametry jądra"),
-    "firewall-cmd": ("configures firewalld", "konfiguruje zaporę firewalld"),
-    "ufw": ("configures the firewall (Ubuntu)", "konfiguruje zaporę (Ubuntu)"),
-    "kill": ("sends a signal to a process", "wysyła sygnał do procesu"),
-    "pkill": ("signals processes by name", "wysyła sygnał procesom po nazwie"),
-    "reboot": ("restarts the computer", "uruchamia komputer ponownie"),
-    "shutdown": ("shuts down the computer", "wyłącza komputer"),
-    "true": ("does nothing and succeeds", "nic nie robi i kończy się sukcesem"),
-    "restorecon": ("restores SELinux labels", "przywraca etykiety SELinux"),
-    "setsebool": ("sets an SELinux boolean", "ustawia przełącznik SELinux"),
-    "hostnamectl": ("sets the hostname", "ustawia nazwę komputera"),
-    "timedatectl": ("sets time and time zone", "ustawia czas i strefę czasową"),
-    "loginctl": ("controls login sessions", "steruje sesjami logowania"),
-    "tailscale": ("controls Tailscale VPN", "steruje VPN Tailscale"),
-    "docker": ("controls Docker containers", "steruje kontenerami Dockera"),
-    "podman": ("controls Podman containers", "steruje kontenerami Podmana"),
-    "efibootmgr": ("changes UEFI boot entries", "zmienia wpisy rozruchu UEFI"),
-}
-
+# commands whose first argument is a subcommand (shown on the first line)
 SUBCOMMAND_TOOLS = {"systemctl", "dnf", "dnf5", "apt", "apt-get", "flatpak", "snap", "tailscale", "docker", "podman",
                     "loginctl", "hostnamectl", "timedatectl", "firewall-cmd", "ufw"}
-
-_PKG = {
-    "install": ("installs packages", "instaluje pakiety"),
-    "remove": ("removes packages", "usuwa pakiety"),
-    "erase": ("removes packages", "usuwa pakiety"),
-    "purge": ("removes packages with their configuration", "usuwa pakiety razem z konfiguracją"),
-    "upgrade": ("upgrades packages", "aktualizuje pakiety"),
-    "update": ("updates packages / package lists", "aktualizuje pakiety / listy pakietów"),
-    "full-upgrade": ("upgrades, removing packages if needed", "aktualizuje, w razie potrzeby usuwając pakiety"),
-    "dist-upgrade": ("upgrades, removing packages if needed", "aktualizuje, w razie potrzeby usuwając pakiety"),
-    "reinstall": ("reinstalls packages", "instaluje pakiety ponownie"),
-    "autoremove": ("removes packages nobody needs", "usuwa niepotrzebne pakiety"),
-    "downgrade": ("installs an older version", "instaluje starszą wersję"),
-    "swap": ("replaces one package with another", "zamienia jeden pakiet na drugi"),
-    "makecache": ("downloads repository metadata", "pobiera metadane repozytoriów"),
-    "refresh": ("updates snaps", "aktualizuje snapy"),
-    "uninstall": ("removes applications", "usuwa aplikacje"),
-    "remote-add": ("adds a repository", "dodaje repozytorium"),
-    "override": ("changes app permissions", "zmienia uprawnienia aplikacji"),
+# options that take the next argument as their value, when man cannot tell (it is also asked)
+VALUE_OPTIONS: dict[str, set[str]] = {
+    "bash": {"-c"}, "sh": {"-c"},
+    "cp": {"-t", "--target-directory"}, "mv": {"-t", "--target-directory"}, "ln": {"-t", "--target-directory"},
+    "install": {"-m", "--mode", "-o", "--owner", "-g", "--group", "-t", "--target-directory"},
+    "mkdir": {"-m", "--mode"},
+    "dnf": {"--repo", "--setopt"}, "dnf5": {"--repo", "--setopt"},
+    "journalctl": {"-n", "--lines", "-u", "--unit"},
+    "mount": {"-o", "--options", "-t", "--types"},
+    "sed": {"-e", "--expression"},
+    "sysctl": {"-p", "--load"},
+    "usermod": {"-G", "--groups", "-d", "--home", "-s", "--shell"},
 }
-SUBCOMMANDS = {
-    "systemctl": {
-        "start": ("starts the unit now", "uruchamia jednostkę teraz"),
-        "stop": ("stops the unit", "zatrzymuje jednostkę"),
-        "restart": ("stops and starts the unit", "zatrzymuje i uruchamia jednostkę"),
-        "reload": ("reloads the unit's configuration", "przeładowuje konfigurację jednostki"),
-        "enable": ("starts the unit at boot", "włącza jednostkę przy starcie systemu"),
-        "disable": ("no longer starts the unit at boot", "wyłącza start jednostki przy starcie systemu"),
-        "mask": ("blocks the unit from starting at all", "całkowicie blokuje start jednostki"),
-        "unmask": ("unblocks a masked unit", "odblokowuje zablokowaną jednostkę"),
-        "daemon-reload": ("re-reads unit files after a change", "wczytuje pliki jednostek po zmianie"),
-        "edit": ("edits a unit (drop-in override)", "edytuje jednostkę (plik nadpisujący)"),
-        "status": ("shows the unit's status", "pokazuje stan jednostki"),
-        "kill": ("sends a signal to the unit's processes", "wysyła sygnał procesom jednostki"),
-    },
-    "dnf": _PKG, "dnf5": _PKG, "apt": _PKG, "apt-get": _PKG, "flatpak": _PKG, "snap": _PKG,
-    "tailscale": {
-        "up": ("connects to the tailnet", "łączy z tailnetem"),
-        "down": ("disconnects", "rozłącza"),
-        "set": ("changes settings", "zmienia ustawienia"),
-        "serve": ("shares a local service in the tailnet", "udostępnia lokalną usługę w tailnecie"),
-    },
-}
-
-_UNIT_SUBS = {"start", "stop", "restart", "reload", "enable", "disable", "mask", "unmask", "edit", "status", "kill"}
-_PKG_SUBS = {"install", "remove", "erase", "purge", "reinstall", "downgrade", "swap", "upgrade", "update", "uninstall"}
-
-# options per command: {command: {(aliases…): (en, pl)}}; "*" marks options that take a value
-_O = {
-    "install": {
-        ("-m*", "--mode*"): ("set permissions (as chmod)", "ustawia prawa dostępu (jak chmod)"),
-        ("-o*", "--owner*"): ("set the owner", "ustawia właściciela"),
-        ("-g*", "--group*"): ("set the group", "ustawia grupę"),
-        ("-d", "--directory"): ("create directories instead of copying", "tworzy katalogi zamiast kopiować"),
-        ("-D",): ("also create missing parent directories", "tworzy też brakujące katalogi nadrzędne"),
-        ("-t*", "--target-directory*"): ("copy into this directory", "kopiuje do tego katalogu"),
-        ("-p", "--preserve-timestamps"): ("keep file times", "zachowuje czasy plików"),
-        ("-b",): ("back up existing files", "robi kopię istniejących plików"),
-        ("-C", "--compare"): ("skip unchanged files", "pomija niezmienione pliki"),
-        ("-v", "--verbose"): ("print what is done", "wypisuje, co robi"),
-    },
-    "cp": {
-        ("-r", "-R", "--recursive"): ("copy directories with contents", "kopiuje katalogi z zawartością"),
-        ("-a", "--archive"): ("copy everything, keeping attributes", "kopiuje wszystko, zachowując atrybuty"),
-        ("-p",): ("keep mode, owner and times", "zachowuje prawa, właściciela i czasy"),
-        ("-f", "--force"): ("overwrite without asking", "nadpisuje bez pytania"),
-        ("-i", "--interactive"): ("ask before overwriting", "pyta przed nadpisaniem"),
-        ("-n", "--no-clobber"): ("never overwrite", "nigdy nie nadpisuje"),
-        ("-t*", "--target-directory*"): ("copy into this directory", "kopiuje do tego katalogu"),
-        ("-v", "--verbose"): ("print what is done", "wypisuje, co robi"),
-    },
-    "mv": {
-        ("-f", "--force"): ("overwrite without asking", "nadpisuje bez pytania"),
-        ("-i", "--interactive"): ("ask before overwriting", "pyta przed nadpisaniem"),
-        ("-n", "--no-clobber"): ("never overwrite", "nigdy nie nadpisuje"),
-        ("-t*", "--target-directory*"): ("move into this directory", "przenosi do tego katalogu"),
-        ("-v", "--verbose"): ("print what is done", "wypisuje, co robi"),
-    },
-    "rm": {
-        ("-r", "-R", "--recursive"): ("delete directories with all contents", "usuwa katalogi z całą zawartością"),
-        ("-f", "--force"): ("never ask, ignore missing files", "nie pyta, pomija brakujące pliki"),
-        ("-i",): ("ask before each deletion", "pyta przed każdym usunięciem"),
-        ("-v", "--verbose"): ("print what is done", "wypisuje, co robi"),
-    },
-    "ln": {
-        ("-s", "--symbolic"): ("symbolic link", "dowiązanie symboliczne"),
-        ("-f", "--force"): ("replace an existing link or file", "zastępuje istniejące dowiązanie albo plik"),
-        ("-n", "--no-dereference"): ("treat a link to a directory as a file", "dowiązanie do katalogu traktuje jak plik"),
-        ("-r", "--relative"): ("make the link relative", "tworzy dowiązanie względne"),
-        ("-t*", "--target-directory*"): ("create links in this directory", "tworzy dowiązania w tym katalogu"),
-        ("-v", "--verbose"): ("print what is done", "wypisuje, co robi"),
-    },
-    "mkdir": {
-        ("-p", "--parents"): ("also create parents, no error if it exists", "tworzy też nadrzędne, bez błędu, gdy istnieje"),
-        ("-m*", "--mode*"): ("set permissions", "ustawia prawa dostępu"),
-        ("-v", "--verbose"): ("print what is done", "wypisuje, co robi"),
-    },
-    "chmod": {("-R", "--recursive"): ("also everything inside directories", "także wszystko w katalogach"),
-              ("-v", "--verbose"): ("print what is done", "wypisuje, co robi")},
-    "chown": {("-R", "--recursive"): ("also everything inside directories", "także wszystko w katalogach"),
-              ("-h", "--no-dereference"): ("change the link itself", "zmienia samo dowiązanie"),
-              ("-v", "--verbose"): ("print what is done", "wypisuje, co robi")},
-    "tee": {("-a", "--append"): ("append instead of overwriting", "dopisuje zamiast nadpisywać")},
-    "sed": {("-i", "--in-place"): ("edit files in place", "zmienia pliki na miejscu"),
-            ("-e*", "--expression*"): ("editing script", "skrypt edycji"),
-            ("-E", "-r", "--regexp-extended"): ("extended regular expressions", "rozszerzone wyrażenia regularne"),
-            ("-n", "--quiet"): ("print only what is asked", "wypisuje tylko to, o co poproszono")},
-    "systemctl": {("--now",): ("also start/stop it right away", "od razu także uruchamia/zatrzymuje"),
-                  ("-q", "--quiet"): ("less output", "mniej komunikatów"),
-                  ("--no-block",): ("do not wait for the result", "nie czeka na wynik"),
-                  ("-f", "--force"): ("force the operation", "wymusza operację")},
-    "dnf": {("-y", "--assumeyes"): ("answer yes to all questions", "odpowiada „tak” na wszystkie pytania"),
-            ("--refresh",): ("refresh metadata first", "najpierw odświeża metadane"),
-            ("--setopt*",): ("override a configuration option", "nadpisuje opcję konfiguracji"),
-            ("--repo*",): ("use only this repository", "używa tylko tego repozytorium")},
-    "apt": {("-y", "--yes"): ("answer yes to all questions", "odpowiada „tak” na wszystkie pytania"),
-            ("--no-install-recommends",): ("skip recommended packages", "pomija pakiety zalecane")},
-    "usermod": {("-a", "--append"): ("add to groups (keep the others)", "dodaje do grup (zachowuje pozostałe)"),
-                ("-G*", "--groups*"): ("supplementary groups", "grupy dodatkowe"),
-                ("-s*", "--shell*"): ("login shell", "powłoka logowania"),
-                ("-d*", "--home*"): ("home directory", "katalog domowy"),
-                ("-L", "--lock"): ("lock the account", "blokuje konto"),
-                ("-U", "--unlock"): ("unlock the account", "odblokowuje konto")},
-    "mount": {("-t*", "--types*"): ("filesystem type", "typ systemu plików"),
-              ("-o*", "--options*"): ("mount options", "opcje montowania")},
-    "sysctl": {("-w", "--write"): ("set a value", "ustawia wartość"),
-               ("-p*", "--load*"): ("load settings from a file", "wczytuje ustawienia z pliku")},
-    "journalctl": {("-u*", "--unit*"): ("only this unit", "tylko ta jednostka"),
-                   ("-n*", "--lines*"): ("number of lines", "liczba wierszy"),
-                   ("-b", "--boot"): ("only this boot", "tylko bieżący rozruch"),
-                   ("-f", "--follow"): ("follow new entries", "śledzi nowe wpisy")},
-    "flatpak": {("--system",): ("system-wide installation", "instalacja dla całego systemu"),
-                ("--user",): ("installation for your user", "instalacja dla Twojego użytkownika"),
-                ("-y", "--assumeyes"): ("answer yes to all questions", "odpowiada „tak” na wszystkie pytania")},
-    "bash": {("-c*",): ("run this command text", "uruchamia ten tekst polecenia"),
-             ("-x",): ("print each command as it runs", "wypisuje każde wykonywane polecenie"),
-             ("-e",): ("stop at the first error", "kończy przy pierwszym błędzie")},
-}
-_O["dnf5"] = _O["dnf"]
-_O["apt-get"] = _O["apt"]
-_O["sh"] = _O["bash"]
-_O["chgrp"] = _O["chown"]
-
-OPTIONS: dict[str, dict[str, tuple[str, str]]] = {}
-VALUE_OPTIONS: dict[str, set[str]] = {}
-for _cmd, _table in _O.items():
-    for _aliases, _text in _table.items():
-        for _alias in _aliases:
-            _name = _alias.rstrip("*")
-            OPTIONS.setdefault(_cmd, {})[_name] = _text
-            if _alias.endswith("*"):
-                VALUE_OPTIONS.setdefault(_cmd, set()).add(_name)
-
-LOCATIONS = [  # longest match first
-    ("/usr/local/bin/", "programs installed locally for all users"),
-    ("/usr/local/sbin/", "programs installed locally for all users"),
-    ("/etc/systemd/", "systemd units and configuration"),
-    ("/usr/lib/systemd/", "systemd units and configuration"),
-    ("/etc/", "system configuration"),
-    ("/usr/local/", "programs installed locally for all users"),
-    ("/usr/", "system files managed by the package manager"),
-    ("/boot/", "boot files (kernel, bootloader)"),
-    ("/opt/", "optional software"),
-    ("/var/", "variable data (logs, caches, databases)"),
-    ("/tmp/", "temporary files"),
-]
 
 
 # ── command model ───────────────────────────────────────────────────────────────────────────────────────────
@@ -365,9 +113,9 @@ class Token:
     arg: str = ""           # the original argument (for a joined value: just the value)
     index: int = 0          # position in argv
     option: str = ""        # for options and their values: the option name
-    role: str = ""          # e.g. source / destination / package / unit
+    role: str = ""          # destination / script / mode / owner — see _assign_roles
     joined: bool = False    # no space before this token (value of --opt=value)
-    notes: list[tuple[str, str]] = field(default_factory=list)  # (source, text) — filled by explain()
+    notes: list[str] = field(default_factory=list)  # tooltip lines — filled by explain()
 
 
 # zero-width and bidirectional-control characters: printable for Python, invisible (or misleading) on screen
@@ -403,7 +151,9 @@ def _short_command(path: str) -> str:
     """The bare name when sudo would find this very file by it (the full path is in the tooltip); otherwise the path —
     also when the file is unsafe, so the warning stays next to what is shown."""
     name = os.path.basename(path)
-    if path.startswith("/") and shutil.which(name, path=SECURE_PATH) == path and not _unsafe_for_root(path):
+    found = shutil.which(name, path=SECURE_PATH)
+    if path.startswith("/") and found and os.path.realpath(found) == os.path.realpath(path) \
+            and not _unsafe_for_root(path) and not _unsafe_for_root(found):
         return name
     return path
 
@@ -457,31 +207,15 @@ def tokenize(argv: list[str], value_options: dict[str, set[str]] | None = None) 
 
 
 def _assign_roles(cmd: str, tokens: list[Token]) -> None:
+    """Mark the arguments rootwhy checks for a warning: a destination that gets replaced, a script root will run,
+    a permission mode, a new owner."""
     positional = [t for t in tokens if t.kind in ("path", "arg")]
     options = {t.option for t in tokens if t.kind == "option"}
-    sub = next((t.arg for t in tokens if t.kind == "subcommand"), "")
-    if cmd in ("cp", "mv", "install", "ln") and positional:
-        if options & {"-t", "--target-directory", "-d", "--directory"}:
-            return
-        if len(positional) == 1 and cmd == "ln":
-            positional[0].role = "link target (what the link points to)"
-            return
-        *sources, dest = positional
-        for t in sources:
-            t.role = "link target (what the link points to)" if cmd == "ln" else "source"
-        if sources:
-            dest.role = "name of the link to create" if cmd == "ln" else "destination"
-    elif cmd in ("rm", "rmdir"):
-        for t in positional:
-            t.role = "will be deleted"
+    if cmd in ("cp", "mv", "install") and len(positional) > 1 and not options & {"-t", "--target-directory", "-d",
+                                                                                 "--directory"}:
+        positional[-1].role = "destination"
     elif cmd in ("bash", "sh") and positional and "-c" not in options:
-        positional[0].role = "script that will run as root"
-    elif cmd == "systemctl" and sub in _UNIT_SUBS:
-        for t in positional:
-            t.role = "systemd unit"
-    elif cmd in SUBCOMMANDS and sub in _PKG_SUBS and SUBCOMMANDS[cmd] is _PKG:
-        for t in positional:
-            t.role = "package"
+        positional[0].role = "script"
     elif cmd == "chmod" and positional:
         positional[0].role = "mode"
     elif cmd in ("chown", "chgrp") and positional:
@@ -518,8 +252,19 @@ def _clean_man(text: str) -> str:
     return re.sub(r"\x1b\[[0-9;]*[A-Za-z]", "", text)
 
 
+def _shorten(description: str) -> str:
+    """One readable sentence: hyphenation joined, first sentence only, at most 160 characters."""
+    description = re.sub(r"\s+", " ", re.sub(r"‐\s+", "", description)).strip()
+    description = re.split(r"(?<=[a-z\)])\.\s+(?=[A-Z])", description, maxsplit=1)[0]
+    if len(description) > 160:
+        description = description[:159].rsplit(" ", 1)[0] + "…"
+    return description
+
+
 def parse_man(text: str) -> tuple[str, dict[str, tuple[bool, str]]]:
-    """From a rendered man page: (one-line summary, {option: (takes_value, description)})."""
+    """From a rendered man page: (one-line summary, {option or subcommand: (takes_value, description)}).
+    A subcommand entry is a lowercase word at the start of an indented line, described by the more-indented lines
+    below it (like `start UNIT...` in systemctl(1))."""
     text = _clean_man(text)
     lines = text.splitlines()
     summary = ""
@@ -531,11 +276,22 @@ def parse_man(text: str) -> tuple[str, dict[str, tuple[bool, str]]]:
             break
     options: dict[str, tuple[bool, str]] = {}
     header = re.compile(r"^( {2,12})(--?[A-Za-z0-9?].*)$")
+    word = re.compile(r"^( {2,12})([a-z][\w-]*)(?:\s+\S.*)?$")
     i = 0
     while i < len(lines):
         m = header.match(lines[i])
         if not m:
-            i += 1
+            w = word.match(lines[i])
+            nxt = lines[i + 1] if i + 1 < len(lines) else ""
+            if w and nxt.strip() and len(nxt) - len(nxt.lstrip()) > len(w.group(1)):
+                desc, j = [], i + 1
+                while j < len(lines) and lines[j].strip() and len(lines[j]) - len(lines[j].lstrip()) > len(w.group(1)):
+                    desc.append(lines[j].strip())
+                    j += 1
+                options.setdefault(w.group(2), (False, _shorten(" ".join(desc))))
+                i = j
+            else:
+                i += 1
             continue
         indent = len(m.group(1))
         parts = re.split(r"\s{2,}", m.group(2), maxsplit=1)  # description may follow on the same line
@@ -554,12 +310,8 @@ def parse_man(text: str) -> tuple[str, dict[str, tuple[bool, str]]]:
             tail = nm.group(2)
             if not tail.startswith("[") and re.match(r"(=|\s+\S)", tail):
                 takes = True
-        description = " ".join(desc)
-        description = re.sub(r"\s+", " ", re.sub(r"‐\s+", "", description)).strip()
-        if len(description) > 240:
-            description = description[:239].rsplit(" ", 1)[0] + "…"
         for n in names:
-            options.setdefault(n, (takes, description))
+            options.setdefault(n, (takes, _shorten(" ".join(desc))))
         i = j
     return summary, options
 
@@ -582,95 +334,37 @@ def man_info(cmd: str) -> tuple[str, dict[str, tuple[bool, str]]]:
     return result
 
 
-def describe_permissions(mode: int, directory: bool = False) -> str:
-    """Permission bits in words; for a directory the x bit means entering it."""
-    rwx = stat.filemode(stat.S_IMODE(mode) | (stat.S_IFDIR if directory else stat.S_IFREG))[1:]
-
-    def who(bits: int) -> str:
-        parts = [n for b, n in ((4, _("read")), (2, _("write")), (1, _("enter") if directory else _("execute")))
-                 if bits & b]
-        return ", ".join(parts) or _("nothing")
-
-    text = _("permissions: owner — {o}; group — {g}; others — {x} ({r})", r=rwx, o=who(mode >> 6 & 7),
-             g=who(mode >> 3 & 7), x=who(mode & 7))
-    if mode & 0o6000 and not directory:
-        text += "\n" + _("⚠ setuid/setgid bit — runs with the owner's rights")
-    return text
+def mode_warning(value: str) -> str | None:
+    if re.fullmatch(r"[0-7]{3,4}", value) and int(value, 8) & 0o6000:
+        return _("⚠ setuid/setgid bit — runs with the owner's rights")
+    return None
 
 
-def describe_mode(value: str) -> str | None:
-    if not re.fullmatch(r"[0-7]{3,4}", value):
-        return None
-    return describe_permissions(int(value, 8))
-
-
-def describe_owner(value: str) -> str:
+def owner_warning(value: str) -> str | None:
     user, _sep, group = value.partition(":")
-    out = []
     try:
         if user:
-            pw = pwd.getpwnam(user) if not user.isdigit() else pwd.getpwuid(int(user))
-            out.append(_("user {u} (UID {i})", u=pw.pw_name, i=pw.pw_uid))
+            pwd.getpwnam(user) if not user.isdigit() else pwd.getpwuid(int(user))
         if group:
-            gr = grp.getgrnam(group) if not group.isdigit() else grp.getgrgid(int(group))
-            out.append(_("group {g} (GID {i})", g=gr.gr_name, i=gr.gr_gid))
+            grp.getgrnam(group) if not group.isdigit() else grp.getgrgid(int(group))
     except (KeyError, ValueError):
-        return _("unknown user or group")
-    return ", ".join(out)
+        return _("⚠ no such user or group on this system")
+    return None
 
 
-def _human(size: int) -> str:
-    for unit in ("B", "kB", "MB", "GB"):
-        if size < 1024 or unit == "GB":
-            return f"{size:.0f} {unit}" if unit == "B" else f"{size:.1f} {unit}"
-        size /= 1024
-    return str(size)
-
-
-def path_facts(path: str, cwd: str | None = None) -> list[str]:
-    p = os.path.expanduser(path)
-    if cwd and not os.path.isabs(p):
-        p = os.path.join(cwd, p)
-    facts = []
-    try:
-        st = os.lstat(p)
-    except FileNotFoundError:
+def path_warnings(path: str, cwd: str | None = None, role: str = "") -> list[str]:
+    """Only what deserves attention: a missing path, a destination that gets replaced, an unsafe script."""
+    p = os.path.join(cwd or os.getcwd(), os.path.expanduser(path))
+    if not os.path.lexists(p):
         parent = os.path.dirname(os.path.abspath(p)) or "/"
-        facts.append(_("does not exist yet (will be created)") if os.path.isdir(parent)
-                     else _("does not exist, and neither does its parent directory"))
-        st = None
-    except OSError:
-        return [_("cannot be checked (no permission)")]
-    if st is not None:
-        if stat.S_ISLNK(st.st_mode):
-            kind = _("symlink → {t}", t=os.readlink(p))
-        elif stat.S_ISDIR(st.st_mode):
-            kind = _("directory")
-        elif stat.S_ISREG(st.st_mode):
-            kind = f"{_('file')}, {_human(st.st_size)}"
-        else:
-            kind = _("special file")
-        try:
-            owner = pwd.getpwuid(st.st_uid).pw_name
-        except KeyError:
-            owner = str(st.st_uid)
-        try:
-            group = grp.getgrgid(st.st_gid).gr_name
-        except KeyError:
-            group = str(st.st_gid)
-        facts.append(f"{kind}; " + _("owner {o}, group {g}", o=owner, g=group))
-        if not stat.S_ISLNK(st.st_mode):  # a symlink's own mode bits mean nothing
-            facts.append(describe_permissions(st.st_mode, stat.S_ISDIR(st.st_mode)))
-    absolute = os.path.abspath(p)
-    home = os.path.expanduser("~")
-    if absolute.startswith(home.rstrip("/") + "/"):
-        facts.append(_("in your home directory"))
-    else:
-        for prefix, label in LOCATIONS:
-            if absolute.startswith(prefix):
-                facts.append(_(label))
-                break
-    return facts
+        if os.path.isdir(parent):
+            return [_("does not exist yet (will be created)")] if role == "destination" else [_("⚠ does not exist")]
+        return [_("⚠ does not exist, and neither does its parent directory")]
+    if role == "destination" and os.path.isfile(p) and not os.path.islink(p):
+        return [_("⚠ an existing file — it will be replaced")]
+    if role == "script" and _unsafe_for_root(p):
+        return [_("⚠ not owned by root or writable by others — could be changed before it runs")]
+    return []
 
 
 def _resolve_command(cmd: str) -> str | None:
@@ -715,102 +409,41 @@ def _unit_description(unit: str) -> str:
         return ""
 
 
-def _agent_matches(token: Token, fragment: str) -> bool:
-    if fragment in (token.arg, token.shown, token.option):
-        return True
-    if token.kind in ("path", "value", "arg", "command") and "/" in token.arg:
-        return token.arg.endswith("/" + fragment.lstrip("/")) or os.path.basename(token.arg) == fragment
-    return False
-
-
-def explain(tokens: list[Token], agent: dict[str, str] | None = None, cwd: str | None = None,
-            use_system: bool = True) -> list[str]:
-    """Fill token.notes. Returns the requester's notes that matched no token (shown separately)."""
-    agent = agent or {}
-    used: set[str] = set()
+def explain(tokens: list[Token], cwd: str | None = None, use_system: bool = True) -> None:
+    """Fill token.notes from the system only: man pages (in the system's language, when translated) and checks of
+    the files involved. A part the system says nothing about gets no tooltip."""
     if not tokens:
-        return list(agent.values())
+        return
     cmd = os.path.basename(tokens[0].arg)
-    summary, man_opts = man_info(cmd) if use_system else ("", {})
+    summary, man_entries = man_info(cmd) if use_system else ("", {})
     for t in tokens:
-        for fragment, text in agent.items():
-            if _agent_matches(t, fragment):
-                t.notes.append(("agent", text))
-                used.add(fragment)
-        builtin: list[str] = []
-        system: list[str] = []
         if t.kind == "command":
-            builtin.append(f"{_('command')}: {L(*COMMANDS[cmd])}" if cmd in COMMANDS else _("command"))
             if summary:
-                system.append(f"man {cmd}: {summary}")
+                t.notes.append(summary)
             if use_system:
                 resolved = _resolve_command(t.arg)
-                if resolved:
-                    real = os.path.realpath(resolved)
-                    system.append(_("root will run {p}", p=resolved) + ("" if real == resolved else " " + _("(the file {f})", f=real)))
-                    system += path_facts(resolved, cwd)
-                    if _unsafe_for_root(resolved):
-                        system.append(_("⚠ not owned by root or writable by others — could be changed before it runs"))
-                else:
-                    system.append(_("not found in sudo's PATH"))
-        elif t.kind == "subcommand":
-            text = SUBCOMMANDS.get(cmd, {}).get(t.arg)
-            builtin.append(f"{_('subcommand')}: {L(*text)}" if text else _("subcommand"))
-        elif t.kind == "option":
-            text = OPTIONS.get(cmd, {}).get(t.option)
-            if not text and len(t.option) > 2 and not t.option.startswith("--"):
-                letters = [OPTIONS.get(cmd, {}).get("-" + ch) for ch in t.option[1:]]
-                if all(letters):
-                    text = tuple("; ".join(x[k] for x in letters) for k in (0, 1))
-            builtin.append(f"{_('option')}: {L(*text)}" if text else _("option"))
-            man_text = man_opts.get(t.option, (False, ""))[1]
-            if not man_text and len(t.option) > 2 and not t.option.startswith("--"):
-                man_text = "; ".join(man_opts[f"-{ch}"][1] for ch in t.option[1:] if f"-{ch}" in man_opts)
-            if man_text:
-                system.append(f"man {cmd}: {man_text}")
-        elif t.kind == "value":
-            builtin.append(_("value of {o}", o=t.option))
-            opt = t.option
-            if opt in ("-m", "--mode") and cmd in ("install", "mkdir"):
-                mode = describe_mode(t.arg)
-                if mode:
-                    system.append(mode)
-            elif opt in ("-o", "--owner", "-g", "--group") and cmd == "install" and use_system:
-                system.append(describe_owner(":" + t.arg if opt in ("-g", "--group") else t.arg))
-            elif opt in ("-t", "--target-directory") or _looks_like_path(t.arg):
-                if use_system:
-                    system += path_facts(t.arg, cwd)
-        elif t.kind == "marker":
-            builtin.append(_("end of options — everything after is an argument"))
-        else:  # path / arg
-            label = _("path to a file or directory") if t.kind == "path" else _("argument")
-            if t.role == "mode":
-                builtin.append(L("permissions", "prawa dostępu"))
-                mode = describe_mode(t.arg)
-                if mode:
-                    system.append(mode)
-            elif t.role == "owner":
-                builtin.append(L("new owner", "nowy właściciel"))
-                if use_system:
-                    system.append(describe_owner(t.arg))
-            else:
-                builtin.append(f"{label}: {_(t.role)}" if t.role else label)
-            if t.role == "systemd unit" and use_system:
-                desc = _unit_description(t.arg)
-                if desc:
-                    system.append(_("unit: {d}", d=desc))
-            if t.kind == "path" and use_system:
-                facts = path_facts(t.arg, cwd)
-                system += facts
-                p = os.path.join(cwd or os.getcwd(), os.path.expanduser(t.arg))
-                if t.role == "destination" and os.path.isfile(p) and not os.path.islink(p):
-                    system.append(_("⚠ an existing file — it will be replaced"))
-                elif t.role == "destination" and os.path.isdir(p):
-                    system.append(_("files will be placed in this directory"))
-                if t.role == "script that will run as root" and os.path.isfile(p) and _unsafe_for_root(p):
-                    system.append(_("⚠ not owned by root or writable by others — could be changed before it runs"))
-        t.notes += [("builtin", x) for x in builtin] + [("system", x) for x in system]
-    return [text for fragment, text in agent.items() if fragment not in used]
+                if not resolved:
+                    t.notes.append(_("⚠ not found in sudo's PATH"))
+                elif _unsafe_for_root(resolved):
+                    t.notes.append(resolved)
+                    t.notes.append(_("⚠ not owned by root or writable by others — could be changed before it runs"))
+        elif t.kind in ("subcommand", "option"):
+            text = man_entries.get(t.option or t.arg, (False, ""))[1]
+            if text:
+                t.notes.append(text)
+            elif t.kind == "option" and len(t.option) > 2 and not t.option.startswith("--"):  # -la → -l, -a
+                t.notes += [f"-{ch}  {man_entries[f'-{ch}'][1]}" for ch in t.option[1:]
+                            if man_entries.get(f"-{ch}", (False, ""))[1]]
+        elif t.role == "mode":
+            t.notes += [x for x in [mode_warning(t.arg)] if x]
+        elif t.role == "owner" and use_system:
+            t.notes += [x for x in [owner_warning(t.arg)] if x]
+        elif t.kind == "value" and t.option in ("-m", "--mode") and cmd in ("install", "mkdir"):
+            t.notes += [x for x in [mode_warning(t.arg)] if x]
+        elif t.kind == "value" and t.option in ("-o", "--owner", "-g", "--group") and cmd == "install" and use_system:
+            t.notes += [x for x in [owner_warning(":" + t.arg if t.option in ("-g", "--group") else t.arg)] if x]
+        elif t.kind == "path" and use_system:
+            t.notes += path_warnings(t.arg, cwd, t.role)
 
 
 def _esc(s: str) -> str:
@@ -826,20 +459,8 @@ def line_text(line: list[Token]) -> str:
 
 
 def tooltip_markup(token: Token) -> str:
-    escape = _esc
-    sections = []
-    agent = [x for s, x in token.notes if s == "agent"]
-    builtin = [x for s, x in token.notes if s == "builtin"]
-    system = [x for s, x in token.notes if s == "system"]
-    if agent:
-        sections.append(f"<b>{escape(_('Explanation from the requester'))}</b> "
-                        f"<i>({escape(_('rootwhy does not check it'))})</i>\n" + "\n".join(escape(x) for x in agent))
-    if builtin:
-        sections.append(f"<b>{escape(_('What it is'))}</b>\n" + "\n".join(escape(x) for x in builtin))
-    if system:
-        sections.append(f"<b>{escape(_('Current state (checked by rootwhy)'))}</b>\n"
-                        + "\n".join(escape(x) for x in system))
-    return "\n\n".join(sections) or escape(token.arg)
+    """Tooltip text, or "" when the system has nothing to say about this part."""
+    return "\n".join(_esc(x) for x in token.notes)
 
 
 LOGO_SVG = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256">
@@ -876,7 +497,6 @@ LOGO_SVG = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" widt
 class Request:
     reason: str
     argv: list[str]
-    explanations: dict[str, str]
     attempt: int = 1
     cwd: str = ""
     caller: str = ""
@@ -930,7 +550,7 @@ def gtk_dialog(req: Request) -> str | None:
         raise RuntimeError("GTK cannot open a display")
     tokens = tokenize(req.argv, {os.path.basename(req.argv[0]): {k for k, v in man_info(
         os.path.basename(req.argv[0]))[1].items() if v[0]}} if req.argv else None)
-    leftover = explain(tokens, req.explanations, req.cwd or None)
+    explain(tokens, req.cwd or None)
     result: dict[str, str | None] = {"password": None}
     loop = GLib.MainLoop()
 
@@ -1001,7 +621,7 @@ def gtk_dialog(req: Request) -> str | None:
         add(texts, label(_("Preview — nothing will run."), "rw-dim"))
     add(texts, label(req.reason, "rw-reason"))
 
-    add(outer, label(_("Command (hover over a part for an explanation):"), "rw-dim"))
+    add(outer, label(_("Command (hover over a part for its description from the system's manual):"), "rw-dim"))
     box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
     css_class(box, "rw-box")
     lines = layout(tokens)
@@ -1021,7 +641,8 @@ def gtk_dialog(req: Request) -> str | None:
             tok.set_selectable(False)
             css_class(tok, "rw-tok")
             css_class(tok, f"rw-k-{t.kind}")
-            tok.set_tooltip_markup(tooltip_markup(t))
+            if t.notes:
+                tok.set_tooltip_markup(tooltip_markup(t))
             add(row, tok)
         if n < len(lines) - 1:
             cont = Gtk.Label(label=" \\")
@@ -1035,8 +656,6 @@ def gtk_dialog(req: Request) -> str | None:
     scroll.set_child(box) if v4 else scroll.add(box)
     add(outer, scroll)
 
-    if leftover:
-        add(outer, label(_("Other notes from the requester:") + "\n" + "\n".join(f"• {x}" for x in leftover), "rw-dim"))
     meta = [_("Working directory: {d}", d=req.cwd)] if req.cwd else []
     if req.caller:
         meta.append(_("Requested via: {c} (the programs the request came through)", c=req.caller))
@@ -1272,13 +891,8 @@ def askpass_mode() -> int:
     attempt = int(previous) + 1 if previous.isdigit() else 1
     if state:
         Path(state).write_text(str(attempt))
-    # the command shown is the one sudo will run (its own cmdline); reason and explanations are the requester's claims
-    try:
-        explanations = json.loads(os.environ.get("ROOTWHY_EXPLAIN", "{}"))
-    except json.JSONDecodeError:
-        explanations = {}
-    req = Request(reason=os.environ.get("ROOTWHY_REASON", ""), argv=argv,
-                  explanations={str(k): str(v) for k, v in dict(explanations).items()}, attempt=attempt,
+    # the command shown is the one sudo will run (its own cmdline); the reason is the requester's claim
+    req = Request(reason=os.environ.get("ROOTWHY_REASON", ""), argv=argv, attempt=attempt,
                   cwd=os.environ.get("ROOTWHY_CWD", ""), caller=os.environ.get("ROOTWHY_CALLER", ""))
     password = show_dialog(req)
     if password is None:
@@ -1310,18 +924,17 @@ def _log(log_dir: Path, reason: str, command: str, status: str) -> None:
 def parse_args(args: list[str]) -> argparse.Namespace:
     p = argparse.ArgumentParser(
         prog="rootwhy",
-        description=L("Run a command as root after a password dialog that shows why and explains each part.",
-                      "Uruchamia polecenie jako root po haśle w okienku, które mówi po co i wyjaśnia każdy fragment."),
+        description=L("Run a command as root after a password dialog that shows why, the command in coloured parts "
+                      "and, on hover, each part's description from the system's man pages.",
+                      "Uruchamia polecenie jako root po haśle w okienku, które pokazuje po co, polecenie w kolorowych "
+                      "częściach i — po najechaniu — opis każdej części z podręcznika systemu (man)."),
         epilog=L('Example: rootwhy -r "Restart Ollama after changing its service file." '
-                 '-e ollama="the local AI model server" systemctl restart ollama',
+                 'systemctl restart ollama',
                  'Przykład: rootwhy -r "Restart Ollamy po zmianie pliku usługi." '
-                 '-e ollama="serwer lokalnych modeli AI" systemctl restart ollama'))
+                 'systemctl restart ollama'))
     p.add_argument("-r", "--reason", default="",
                    help=L(f"why the command is needed, {REASON_MIN}–{REASON_MAX} characters (required)",
                           f"po co jest polecenie, {REASON_MIN}–{REASON_MAX} znaków (wymagane)"))
-    p.add_argument("-e", "--explain", action="append", default=[], metavar="FRAGMENT=TEXT",
-                   help=L("explanation shown on hover over the matching part (repeatable)",
-                          "wyjaśnienie po najechaniu na pasujący fragment (można powtarzać)"))
     p.add_argument("--log-dir", default=os.environ.get("ROOTWHY_LOG_DIR", ""),
                    help=L("log directory (default: $XDG_STATE_HOME/rootwhy)",
                           "katalog dziennika (domyślnie $XDG_STATE_HOME/rootwhy)"))
@@ -1345,19 +958,12 @@ def main_mode(args: list[str]) -> int:
     if not ns.command:
         print(_("rootwhy: no command given"), file=sys.stderr)
         return 2
-    explanations: dict[str, str] = {}
-    for item in ns.explain:
-        fragment, eq, text = item.partition("=")
-        if not eq or not fragment or not text.strip():
-            print(_("rootwhy: bad --explain, expected FRAGMENT=TEXT: {e}", e=item), file=sys.stderr)
-            return 2
-        explanations[fragment] = _clean(text)[:EXPLAIN_MAX]
     if not (os.environ.get("WAYLAND_DISPLAY") or os.environ.get("DISPLAY")):
         print(_("rootwhy: no graphical session for the dialog"), file=sys.stderr)
         return 2
     caller = _caller_chain(os.getppid())
     if ns.preview or ns.screenshot:
-        req = Request(reason, ns.command, explanations, cwd=os.getcwd(), caller=caller, preview=True,
+        req = Request(reason, ns.command, cwd=os.getcwd(), caller=caller, preview=True,
                       screenshot=ns.screenshot)
         return 0 if show_dialog(req) is not None else 130
 
@@ -1377,7 +983,7 @@ def main_mode(args: list[str]) -> int:
     fd, state = tempfile.mkstemp(prefix="rootwhy.", dir=os.environ.get("XDG_RUNTIME_DIR") or None)
     os.close(fd)
     env = {k: v for k, v in os.environ.items() if not k.startswith(("ROOTWHY_", "SUDO_"))}
-    env.update(ROOTWHY_MODE="askpass", ROOTWHY_STATE=state, ROOTWHY_REASON=reason, ROOTWHY_EXPLAIN=json.dumps(explanations),
+    env.update(ROOTWHY_MODE="askpass", ROOTWHY_STATE=state, ROOTWHY_REASON=reason,
                ROOTWHY_CWD=os.getcwd(), ROOTWHY_CALLER=caller, SUDO_ASKPASS=os.path.realpath(__file__))
     try:
         sudo = "/usr/bin/sudo" if os.path.exists("/usr/bin/sudo") else "sudo"

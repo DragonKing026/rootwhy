@@ -2,7 +2,7 @@
 
 # rootwhy
 
-**sudo with a password dialog that says _why_ — and explains every part of the command.**
+**sudo with a password dialog that says _why_ — and shows what every part of the command does.**
 
 [Polski](README.pl.md)
 
@@ -11,17 +11,20 @@ a one-line command you have to decode. `rootwhy` shows a dialog with:
 
 - the **reason**, written by whoever asks (e.g. the agent),
 - the **command split into lines and coloured** — command, options, values, paths,
-- an **explanation of every part on hover**: what the requester claims, a built-in plain-language description,
-  facts checked right now (does the file exist, who owns it, permissions, size, is the destination about to be
-  overwritten) and the option's description from `man`,
-- the working directory and the process chain that asked.
+- **on hover, what each part does — from your system's own manual** (`man`, in your language when translated),
+  plus a ⚠ warning when something deserves attention: the destination file will be replaced, the program or script
+  could be changed by someone other than root, a path does not exist, a setuid mode, an unknown user,
+- the working directory and the programs the request came through (e.g. `code → claude → zsh`).
+
+Nothing is invented: rootwhy has no description table of its own and does not take explanations from the
+requester. A part the system knows nothing about simply has no tooltip.
 
 The password goes from the dialog straight to `sudo`. The caller never sees it.
 
 ![rootwhy dialog](docs/dialog-en.png)
 
-Hovering over `755`, for example, shows *permissions rwxr-xr-x: owner read, write, execute; group read, execute;
-others read, execute*. Hovering over the destination shows whether it exists and what lives in `/usr/local/bin`.
+Hovering over `-m`, for example, shows *set permission mode (as in chmod), instead of rwxr-xr-x* — the text from
+`man install`. Hovering over the destination shows *⚠ an existing file — it will be replaced* when it is.
 
 ## Usage
 
@@ -29,29 +32,35 @@ others read, execute*. Hovering over the destination shows whether it exists and
 rootwhy -r "Restart Ollama after changing its service file." systemctl restart ollama
 
 rootwhy -r "Install the nightly backup script system-wide so the timer can run it as root." \
-        -e "755=the script must be executable" \
-        -e "nightly-backup.sh=new version with the fixed target path" \
         -- install -m 755 -o root -g root ./build/nightly-backup.sh /usr/local/bin/nightly-backup.sh
 ```
 
 | Option | |
 | --- | --- |
 | `-r, --reason TEXT` | why the command is needed, 10–300 characters (required) |
-| `-e, --explain FRAGMENT=TEXT` | explanation shown on hover over the matching part; repeatable. Matches a whole argument, an option name or the end of a path. Explanations that match nothing are listed under the command |
 | `--log-dir DIR` | log directory (default `$XDG_STATE_HOME/rootwhy`, i.e. `~/.local/state/rootwhy`; also `ROOTWHY_LOG_DIR`) |
 | `--preview` | show the dialog only, run nothing |
 
 Exit code: the command's own, `130` when cancelled, `2` for usage errors. A wrong password lets `sudo` ask again
 (up to 3 times), and the dialog says so.
 
-### For AI agents
+### For AI agents — Claude Code plugin
 
-Tell the agent to use `rootwhy` instead of `sudo`, for example in `CLAUDE.md` / `AGENTS.md`:
+The repository is also a Claude Code plugin: a **skill** that tells the agent when and how to use rootwhy, and a
+**hook** that stops `sudo`, `pkexec`, `doas`, `run0` and `su` called directly and points to rootwhy instead.
+
+```text
+/plugin marketplace add DragonKing026/rootwhy
+/plugin install rootwhy@rootwhy
+```
+
+The plugin does not install the program — do that first (see Installation). For other agents put the same rule in
+`AGENTS.md`:
 
 ```markdown
-Commands that need root: only through `rootwhy -r "What and why, 1–2 sentences." [-e PART=WHY …] -- command …`,
-never `sudo` directly. Tell the user a password dialog is about to appear. Exit code 130 means they cancelled —
-do not retry without asking.
+Commands that need root: only through `rootwhy -r "What and why, 1–2 sentences." -- command …`, never `sudo`
+directly. Tell the user a password dialog is about to appear. Exit code 130 means they cancelled — do not retry
+without asking.
 ```
 
 ## Security model
@@ -69,13 +78,12 @@ do not retry without asking.
 - **Clean dialog process.** Python runs with `-I`, and the dialog keeps only display, session and language variables:
   `PYTHONPATH`, `GIO_EXTRA_MODULES`, `GTK_*`, `QT_PLUGIN_PATH` and the like cannot load foreign code into the
   process that holds your password.
-- **Nothing runs before you agree.** Explanations come from a built-in table, `man` (which never executes the
-  command), `stat` of paths and `systemctl show` for unit descriptions.
-- **Claims are marked as claims.** The reason and `-e` texts come from the requester; in a tooltip they are labelled
-  *Explanation from the requester (rootwhy does not check it)*, facts checked by rootwhy *Current state (checked by
-  rootwhy)*. A dishonest requester can lie in the reason — the command itself is what you approve.
+- **Nothing runs before you agree.** Descriptions come only from `man` / its parsed page (which never executes the
+  command — `--help` is never called) and warnings from `stat` of the paths involved.
+- **The requester cannot put words in the tooltips.** Only the reason comes from the requester. A dishonest
+  requester can lie in the reason — the command itself is what you approve.
 - **The program is shown by name** (`ls`) only when `sudo` would find that very file by that name and it is safe;
-  otherwise the full path. The path that runs (and where a symlink leads) is always in the tooltip.
+  otherwise the full path and a warning.
 - **Log without passwords:** date, reason, command and exit code, one line each, written before the dialog opens.
 
 Limits: `rootwhy` cannot tell what a script will do when it runs — only what file it is and who can change it (it
@@ -104,13 +112,14 @@ for the log).
 
 ## Language
 
-The interface follows `LANG` / `LC_MESSAGES`: Polish for `pl_*`, English otherwise. Force it with `ROOTWHY_LANG=en`
-or `ROOTWHY_LANG=pl`. Descriptions taken from `man` are in whatever language your man pages are.
+The few fixed texts of the dialog (buttons, warnings) follow `LANG` / `LC_MESSAGES`: Polish for `pl_*`, English
+otherwise; force with `ROOTWHY_LANG=en` or `ROOTWHY_LANG=pl`. Descriptions are in whatever language your man pages
+are — install your distribution's translated man pages (e.g. `man-pages-pl`) to get them in your language.
 
 ## Development
 
 ```bash
-python3 -m unittest discover tests        # command model, explanations, translations (no GTK, no sudo)
+python3 -m unittest discover tests        # command model, man parsing, warnings, translations (no GTK, no sudo)
 ./rootwhy --preview -r "Testing the dialog." -- install -m 644 a /etc/b
 ./rootwhy --screenshot out.png -r "Testing the dialog." -- systemctl restart foo   # renders the window to PNG
 ROOTWHY_GTK=3 ./rootwhy --preview -r "Testing GTK 3." -- true                      # force the GTK 3 dialog
@@ -119,7 +128,7 @@ ROOTWHY_GTK=3 ./rootwhy --preview -r "Testing GTK 3." -- true                   
 The logo is embedded in the program (`LOGO_SVG`, kept equal to `logo.svg` by a test), so the release is one file.
 
 The program is a single file on purpose — it receives your password, so it should be easy to read in one sitting.
-Ideas and fixes for the built-in descriptions (`COMMANDS`, `_O`, `SUBCOMMANDS`) are welcome.
+Tests and `ruff` run on every push (`.github/workflows/test.yml`).
 
 ## Related projects
 
