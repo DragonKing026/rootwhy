@@ -56,11 +56,17 @@ nigdy `sudo` wprost. Uprzedź użytkownika, że pojawi się okienko z hasłem. K
 ## Bezpieczeństwo
 
 - **Każde wywołanie pyta o hasło** (`sudo -k`) — bez korzystania z wcześniejszej zgody.
-- **Tryb hasła tylko pod sudo.** `rootwhy` jest swoim własnym `SUDO_ASKPASS`; w tym trybie nie pokaże okienka, jeśli
-  jego rodzicem nie jest `sudo` — odziedziczone środowisko nie zamieni go w okienko, które wypisze hasło temu, kto je
-  uruchomił.
-- **Widzisz to, co się wykona.** Okienko pokazuje pełną listę argumentów, bez skracania. Argumenty są w cudzysłowach
-  jak w powłoce, a znaki niewidoczne i sterujące kierunkiem tekstu są pokazane jako `$'‮'`.
+- **Tryb hasła tylko pod prawdziwym sudo.** `rootwhy` jest swoim własnym `SUDO_ASKPASS`. W tym trybie pokaże okienko
+  tylko wtedy, gdy rodzicem jest `sudo` uruchomione przez Ciebie: nazwa procesu `sudo`, rzeczywisty UID Twój,
+  efektywny UID 0 (ma go tylko program setuid roota) i, gdy jest widoczny, plik wykonywalny roota z bitem setuid.
+  Odziedziczone środowisko ani podrobione `sudo` nie zamienią go w okienko, które odda hasło temu, kto je uruchomił.
+- **Widzisz to, co się wykona.** Polecenie w okienku pochodzi z `/proc/PID/cmdline` samego sudo, nie z danych od
+  proszącego: wywołanie `sudo` wprost z rootwhy jako programem pytającym i niewinnym opisem i tak pokaże prawdziwe
+  polecenie. Nazwa polecenia jest zamieniana na ścieżkę bezwzględną, zanim dostanie ją sudo. Nic nie jest skracane;
+  argumenty są w cudzysłowach jak w powłoce, a znaki niewidoczne i sterujące kierunkiem tekstu są pokazane jako
+  np. `$'\u202e'`.
+- **Czysty proces okienka.** Python działa z `-I`, a okienko zachowuje tylko zmienne ekranu, sesji i języka:
+  `PYTHONPATH`, `GIO_EXTRA_MODULES`, `GTK_*`, `QT_PLUGIN_PATH` itp. nie wczytają obcego kodu do procesu z hasłem.
 - **Nic nie działa przed zgodą.** Wyjaśnienia pochodzą z wbudowanej tabeli, `man` (nie uruchamia polecenia), `stat`
   ścieżek i `systemctl show` (opis jednostki).
 - **Deklaracje są oznaczone.** Powód i teksty `-e` pochodzą od proszącego i mają etykietę *deklaracja, niesprawdzona*;

@@ -1,4 +1,4 @@
-#!/usr/bin/python3
+#!/usr/bin/python3 -I
 # SPDX-License-Identifier: GPL-3.0-or-later
 # rootwhy — run a command with sudo after a password dialog that explains why and what it does.
 # https://github.com/DragonKing026/rootwhy
@@ -113,6 +113,7 @@ PL = {
     "rootwhy: bad --explain, expected FRAGMENT=TEXT: {e}": "rootwhy: złe --explain, oczekiwano FRAGMENT=TEKST: {e}",
     "rootwhy: cancelled by the user": "rootwhy: anulowane przez użytkownika",
     "rootwhy: askpass mode is only for sudo -A": "rootwhy: tryb hasła tylko dla sudo -A",
+    "rootwhy: command not found: {c}": "rootwhy: nie ma polecenia: {c}",
     "rootwhy: no dialog available (GTK 4, kdialog or zenity)": "rootwhy: brak okienka (GTK 4, kdialog lub zenity)",
 }
 
@@ -660,11 +661,21 @@ def _resolve_command(cmd: str) -> str | None:
 
 
 def _unsafe_for_root(path: str) -> bool:
+    """True when someone other than root could replace what runs: the file or any directory on its real path is not
+    owned by root, or is writable by group/others (a sticky directory such as /tmp counts only for its own entries'
+    owners). Errors count as unsafe."""
     try:
-        st = os.stat(path)
+        real = Path(os.path.realpath(path))
+        for part in [real, *real.parents]:
+            st = os.lstat(part)
+            writable = st.st_mode & (stat.S_IWGRP | stat.S_IWOTH)
+            if part != real and stat.S_ISDIR(st.st_mode) and st.st_mode & stat.S_ISVTX:
+                writable = 0  # sticky: others cannot replace entries they do not own
+            if st.st_uid != 0 or writable:
+                return True
     except OSError:
-        return False
-    return st.st_uid != 0 or bool(st.st_mode & (stat.S_IWGRP | stat.S_IWOTH))
+        return True
+    return False
 
 
 def _unit_description(unit: str) -> str:
@@ -1007,14 +1018,15 @@ def fallback_dialog(req: Request) -> str | None:
     lines = [("    " if n else "") + line + (" \\" if n < len(lines) - 1 else "") for n, line in enumerate(lines)]
     retry = _("Wrong password — try again (attempt {n}).", n=req.attempt) if req.attempt > 1 else ""
     title = f"rootwhy — {_('Administrator access')}"
-    if shutil.which("kdialog"):
+    kdialog, zenity = shutil.which("kdialog", path=SECURE_PATH), shutil.which("zenity", path=SECURE_PATH)
+    if kdialog:
         body = "<br>".join(_esc(x).replace("  ", "&nbsp;&nbsp;") for x in lines)
         text = (f"<p><b>{_esc(retry)}</b></p>" if retry else "") + f"<p>{_esc(req.reason)}</p><p><code>{body}</code></p>"
-        cmd = ["kdialog", "--title", title, "--password", text]
-    elif shutil.which("zenity"):
+        cmd = [kdialog, "--title", title, "--password", text]
+    elif zenity:
         text = (f"<b>{_esc(retry)}</b>\n\n" if retry else "") + f"{_esc(req.reason)}\n\n<tt>" + \
             "\n".join(_esc(x) for x in lines) + "</tt>"
-        cmd = ["zenity", "--entry", "--hide-text", "--title", title, "--width", "760", "--text", text]
+        cmd = [zenity, "--entry", "--hide-text", "--title", title, "--width", "760", "--text", text]
     else:
         raise RuntimeError(_("rootwhy: no dialog available (GTK 4, kdialog or zenity)"))
     out = subprocess.run(cmd, check=False, capture_output=True, text=True, stdin=subprocess.DEVNULL)
@@ -1033,11 +1045,52 @@ def show_dialog(req: Request) -> str | None:
 
 # ── modes ───────────────────────────────────────────────────────────────────────────────────────────────────
 
-def _parent_comm(pid: int) -> str:
+SUDO_PATHS = ("/usr/bin/sudo", "/bin/sudo", "/usr/local/bin/sudo")
+# variables the dialog process keeps; anything else (PYTHON*, GI_*, GIO_*, GTK_*, QT_PLUGIN_PATH, LD_*…) could load
+# foreign code into the process that holds the password
+SAFE_ENV = ("DISPLAY", "WAYLAND_DISPLAY", "XAUTHORITY", "XDG_RUNTIME_DIR", "XDG_SESSION_TYPE", "XDG_CURRENT_DESKTOP",
+            "XDG_SESSION_DESKTOP", "DESKTOP_SESSION", "KDE_FULL_SESSION", "KDE_SESSION_VERSION",
+            "DBUS_SESSION_BUS_ADDRESS", "HOME", "USER", "LOGNAME", "LANG", "LANGUAGE", "XCURSOR_THEME", "XCURSOR_SIZE")
+
+
+def parse_sudo_cmdline(raw: bytes) -> list[str] | None:
+    """The command from the parent's /proc cmdline, only for the exact form rootwhy uses: sudo -k -A -- command…"""
+    parts = raw.decode("utf-8", "surrogateescape").split("\0")
+    if parts and parts[-1] == "":
+        parts.pop()
+    if len(parts) < 5 or os.path.basename(parts[0]) != "sudo" or parts[1:4] != ["-k", "-A", "--"]:
+        return None
+    return parts[4:]
+
+
+def sudo_parent_command(pid: int) -> list[str] | None:
+    """The command the parent sudo will run — None unless the parent really is sudo started by this user.
+    The process name can be faked, so also: real UID is ours, effective UID is 0 (only a setuid-root program gets
+    that), and the executable — when the kernel lets us see it — is a root-owned setuid sudo."""
+    proc = Path(f"/proc/{pid}")
     try:
-        return Path(f"/proc/{pid}/comm").read_text().strip()
-    except OSError:
-        return ""
+        if (proc / "comm").read_text().strip() != "sudo":
+            return None
+        uid = next(line.split()[1:3] for line in (proc / "status").read_text().splitlines() if line.startswith("Uid:"))
+        if int(uid[0]) != os.getuid() or int(uid[1]) != 0:
+            return None
+        try:
+            exe = os.readlink(proc / "exe")
+        except PermissionError:  # normal for a setuid process
+            exe = None
+        if exe is not None:
+            st = os.stat(exe)
+            if exe not in SUDO_PATHS or st.st_uid != 0 or not st.st_mode & stat.S_ISUID:
+                return None
+        return parse_sudo_cmdline((proc / "cmdline").read_bytes())
+    except (OSError, StopIteration, ValueError, IndexError):
+        return None
+
+
+def _safe_environ() -> None:
+    keep = {k: v for k, v in os.environ.items() if k in SAFE_ENV or k.startswith(("LC_", "ROOTWHY_"))}
+    os.environ.clear()
+    os.environ.update(keep, PATH=SECURE_PATH)
 
 
 def _caller_chain(pid: int, depth: int = 3) -> str:
@@ -1057,9 +1110,11 @@ def _caller_chain(pid: int, depth: int = 3) -> str:
 def askpass_mode() -> int:
     """Run by sudo -A: show the dialog, print the password. Only when the parent process is sudo — an inherited
     environment must not turn this into a password prompt for whoever started it."""
-    if _parent_comm(os.getppid()) != "sudo":
+    argv = sudo_parent_command(os.getppid())
+    if not argv:
         print(_("rootwhy: askpass mode is only for sudo -A"), file=sys.stderr)
         return 1
+    _safe_environ()
     state = os.environ.get("ROOTWHY_STATE", "")
     previous = ""
     if state:
@@ -1072,14 +1127,12 @@ def askpass_mode() -> int:
     attempt = int(previous) + 1 if previous.isdigit() else 1
     if state:
         Path(state).write_text(str(attempt))
+    # the command shown is the one sudo will run (its own cmdline); reason and explanations are the requester's claims
     try:
-        argv = json.loads(os.environ.get("ROOTWHY_ARGV", "[]"))
         explanations = json.loads(os.environ.get("ROOTWHY_EXPLAIN", "{}"))
     except json.JSONDecodeError:
-        argv, explanations = [], {}
-    if not argv:
-        argv = [os.environ.get("ROOTWHY_COMMAND", "?")]
-    req = Request(reason=os.environ.get("ROOTWHY_REASON", ""), argv=[str(a) for a in argv],
+        explanations = {}
+    req = Request(reason=os.environ.get("ROOTWHY_REASON", ""), argv=argv,
                   explanations={str(k): str(v) for k, v in dict(explanations).items()}, attempt=attempt,
                   cwd=os.environ.get("ROOTWHY_CWD", ""), caller=os.environ.get("ROOTWHY_CALLER", ""))
     password = show_dialog(req)
@@ -1160,6 +1213,13 @@ def main_mode(args: list[str]) -> int:
                       screenshot=ns.screenshot)
         return 0 if show_dialog(req) is not None else 130
 
+    # resolve once, so the path shown is the path sudo runs (sudo's own PATH may differ from this shell's)
+    if "/" not in ns.command[0]:
+        resolved = shutil.which(ns.command[0], path=SECURE_PATH) or shutil.which(ns.command[0])
+        if not resolved:
+            print(_("rootwhy: command not found: {c}", c=ns.command[0]), file=sys.stderr)
+            return 127
+        ns.command[0] = resolved
     command = " ".join(shell_quote(a) for a in ns.command)
     log_dir = Path(ns.log_dir) if ns.log_dir else \
         Path(os.environ.get("XDG_STATE_HOME") or Path.home() / ".local/state") / "rootwhy"
@@ -1167,8 +1227,7 @@ def main_mode(args: list[str]) -> int:
     fd, state = tempfile.mkstemp(prefix="rootwhy.", dir=os.environ.get("XDG_RUNTIME_DIR") or None)
     os.close(fd)
     env = {k: v for k, v in os.environ.items() if not k.startswith(("ROOTWHY_", "SUDO_"))}
-    env.update(ROOTWHY_MODE="askpass", ROOTWHY_STATE=state, ROOTWHY_REASON=reason,
-               ROOTWHY_ARGV=json.dumps(ns.command), ROOTWHY_EXPLAIN=json.dumps(explanations),
+    env.update(ROOTWHY_MODE="askpass", ROOTWHY_STATE=state, ROOTWHY_REASON=reason, ROOTWHY_EXPLAIN=json.dumps(explanations),
                ROOTWHY_CWD=os.getcwd(), ROOTWHY_CALLER=caller, SUDO_ASKPASS=os.path.realpath(__file__))
     try:
         sudo = "/usr/bin/sudo" if os.path.exists("/usr/bin/sudo") else "sudo"

@@ -138,7 +138,7 @@ class Explain(unittest.TestCase):
     def test_builtin_option_and_combined_flags(self):
         toks = rw.tokenize(["rm", "-rf", "/tmp/x"])
         rw.explain(toks, use_system=False)
-        builtin = [x for s, x in toks[1].notes if s == "builtin"][0]
+        builtin = next(x for s, x in toks[1].notes if s == "builtin")
         self.assertIn("delete directories", builtin)
         self.assertIn("never ask", builtin)
 
@@ -182,12 +182,51 @@ class Polish(unittest.TestCase):
             self.assertEqual(sorted(re.findall(r"\{\w+\}", en)), sorted(re.findall(r"\{\w+\}", pl)), en)
 
 
+class Security(unittest.TestCase):
+    def test_sudo_cmdline_exact_form_only(self):
+        self.assertEqual(rw.parse_sudo_cmdline(b"/usr/bin/sudo\0-k\0-A\0--\0/usr/bin/true\0"), ["/usr/bin/true"])
+        self.assertEqual(rw.parse_sudo_cmdline(b"sudo\0-k\0-A\0--\0rm\0-rf\0/x\0"), ["rm", "-rf", "/x"])
+        self.assertIsNone(rw.parse_sudo_cmdline(b"sudo\0-A\0--\0true\0"))         # without -k
+        self.assertIsNone(rw.parse_sudo_cmdline(b"sudo\0-k\0-A\0--\0"))           # no command
+        self.assertIsNone(rw.parse_sudo_cmdline(b"/tmp/fake\0-k\0-A\0--\0true\0"))  # not sudo
+
+    def test_fake_parent_is_rejected(self):
+        self.assertIsNone(rw.sudo_parent_command(os.getpid()))  # comm is python, euid not 0
+
+    def test_unsafe_for_root(self):
+        self.assertFalse(rw._unsafe_for_root("/usr/bin/true"))
+        with tempfile.TemporaryDirectory() as d:
+            f = Path(d, "s.sh")
+            f.write_text("#!/bin/sh\n")
+            self.assertTrue(rw._unsafe_for_root(str(f)))           # owned by this user
+        self.assertTrue(rw._unsafe_for_root("/nonexistent/xyz"))   # errors count as unsafe
+
+    def test_safe_environ(self):
+        saved = dict(os.environ)
+        try:
+            os.environ.update(PYTHONPATH="/evil", GIO_EXTRA_MODULES="/evil", LD_PRELOAD="/evil.so", LANG="pl_PL.UTF-8",
+                              ROOTWHY_REASON="x", LC_TIME="C")
+            rw._safe_environ()
+            for k in ("PYTHONPATH", "GIO_EXTRA_MODULES", "LD_PRELOAD"):
+                self.assertNotIn(k, os.environ)
+            self.assertEqual((os.environ["LANG"], os.environ["ROOTWHY_REASON"], os.environ["LC_TIME"]),
+                             ("pl_PL.UTF-8", "x", "C"))
+            self.assertEqual(os.environ["PATH"], rw.SECURE_PATH)
+        finally:
+            os.environ.clear()
+            os.environ.update(saved)
+
+
 class Cli(unittest.TestCase):
     def test_reason_required(self):
         self.assertEqual(rw.main_mode(["true"]), 2)
 
     def test_bad_explain(self):
         self.assertEqual(rw.main_mode(["-r", "a valid reason here", "-e", "noequals", "true"]), 2)
+
+    def test_unknown_command(self):
+        os.environ.setdefault("DISPLAY", ":0")
+        self.assertEqual(rw.main_mode(["-r", "a valid reason here", "no-such-command-xyz"]), 127)
 
     def test_askpass_refuses_without_sudo_parent(self):
         self.assertEqual(rw.askpass_mode(), 1)

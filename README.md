@@ -57,11 +57,18 @@ do not retry without asking.
 ## Security model
 
 - **Every call asks for the password** (`sudo -k`): no reuse of an earlier approval.
-- **Askpass mode only under sudo.** `rootwhy` is its own `SUDO_ASKPASS`; in that mode it refuses to show the dialog
-  unless its parent process is `sudo`, so an inherited environment cannot turn it into a password prompt that prints
-  your password to whoever started it.
-- **What you see is what runs.** The dialog shows the complete argument list — nothing is shortened. Arguments are
-  shell-quoted, and invisible or bidirectional-control characters are shown as `$'‮'` escapes.
+- **Askpass mode only under the real sudo.** `rootwhy` is its own `SUDO_ASKPASS`. In that mode it shows the dialog
+  only when its parent is `sudo` started by you: process name `sudo`, real UID yours, effective UID 0 (only a
+  setuid-root program has that) and, when visible, a root-owned setuid executable. An inherited environment or a fake
+  `sudo` cannot turn it into a prompt that hands your password to whoever started it.
+- **What you see is what runs.** The command in the dialog is read from the parent sudo's own `/proc/PID/cmdline`,
+  not from anything the requester passes in: calling `sudo` directly with rootwhy as askpass and a harmless-looking
+  description still shows the real command. The command name is resolved to an absolute path before sudo gets it.
+  Nothing is shortened; arguments are shell-quoted, and invisible or bidirectional-control characters are shown as
+  escapes such as `$'\u202e'`.
+- **Clean dialog process.** Python runs with `-I`, and the dialog keeps only display, session and language variables:
+  `PYTHONPATH`, `GIO_EXTRA_MODULES`, `GTK_*`, `QT_PLUGIN_PATH` and the like cannot load foreign code into the
+  process that holds your password.
 - **Nothing runs before you agree.** Explanations come from a built-in table, `man` (which never executes the
   command), `stat` of paths and `systemctl show` for unit descriptions.
 - **Claims are marked as claims.** The reason and `-e` texts come from the requester and are labelled *claim, not
