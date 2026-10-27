@@ -71,9 +71,11 @@ do not retry without asking.
   process that holds your password.
 - **Nothing runs before you agree.** Explanations come from a built-in table, `man` (which never executes the
   command), `stat` of paths and `systemctl show` for unit descriptions.
-- **Claims are marked as claims.** The reason and `-e` texts come from the requester and are labelled *claim, not
-  verified*; facts checked by rootwhy are labelled *Checked now*. A dishonest requester can lie in the reason —
-  the command itself is what you approve.
+- **Claims are marked as claims.** The reason and `-e` texts come from the requester; in a tooltip they are labelled
+  *Explanation from the requester (rootwhy does not check it)*, facts checked by rootwhy *Current state (checked by
+  rootwhy)*. A dishonest requester can lie in the reason — the command itself is what you approve.
+- **The program is shown by name** (`ls`) only when `sudo` would find that very file by that name and it is safe;
+  otherwise the full path. The path that runs (and where a symlink leads) is always in the tooltip.
 - **Log without passwords:** date, reason, command and exit code, one line each, written before the dialog opens.
 
 Limits: `rootwhy` cannot tell what a script will do when it runs — only what file it is and who can change it (it

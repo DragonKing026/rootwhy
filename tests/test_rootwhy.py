@@ -118,7 +118,18 @@ class Explain(unittest.TestCase):
     def test_mode(self):
         text = rw.describe_mode("755")
         self.assertIn("rwxr-xr-x", text)
-        self.assertIn("owner read, write, execute", text)
+        self.assertIn("owner — read, write, execute; group — read, execute", text)
+
+    def test_directory_permissions_in_words(self):
+        self.assertIn("others — read, enter (rwxr-xr-x)", rw.describe_permissions(0o755, directory=True))
+        facts = rw.path_facts("/")
+        self.assertTrue(any(x.startswith("permissions: ") for x in facts))
+
+    def test_command_shown_as_typed(self):
+        ls = rw.shutil.which("ls", path=rw.SECURE_PATH)
+        if ls and not rw._unsafe_for_root(ls):
+            self.assertEqual(rw.tokenize([ls, "-la"])[0].shown, "ls")
+        self.assertEqual(rw.tokenize(["/no/such/ls"])[0].shown, "/no/such/ls")
         self.assertIn("setuid", rw.describe_mode("4755"))
         self.assertIsNone(rw.describe_mode("u+x"))
 

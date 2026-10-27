@@ -69,9 +69,11 @@ nigdy `sudo` wprost. Uprzedź użytkownika, że pojawi się okienko z hasłem. K
   `PYTHONPATH`, `GIO_EXTRA_MODULES`, `GTK_*`, `QT_PLUGIN_PATH` itp. nie wczytają obcego kodu do procesu z hasłem.
 - **Nic nie działa przed zgodą.** Wyjaśnienia pochodzą z wbudowanej tabeli, `man` (nie uruchamia polecenia), `stat`
   ścieżek i `systemctl show` (opis jednostki).
-- **Deklaracje są oznaczone.** Powód i teksty `-e` pochodzą od proszącego i mają etykietę *deklaracja, niesprawdzona*;
-  fakty sprawdzone przez rootwhy — *Sprawdzone teraz*. Nieuczciwy proszący może skłamać w powodzie — zatwierdzasz
-  samo polecenie.
+- **Deklaracje są oznaczone.** Powód i teksty `-e` pochodzą od proszącego; w dymku mają nagłówek *Wyjaśnienie od
+  proszącego (rootwhy tego nie sprawdza)*, a fakty sprawdzone przez rootwhy — *Stan teraz (sprawdził rootwhy)*.
+  Nieuczciwy proszący może skłamać w powodzie — zatwierdzasz samo polecenie.
+- **Program pokazany z nazwy** (`ls`) tylko wtedy, gdy `sudo` znajdzie po tej nazwie ten sam plik i jest on bezpieczny;
+  inaczej pełna ścieżka. Ścieżka, która się uruchomi (i cel dowiązania), jest zawsze w dymku.
 - **Dziennik bez haseł:** data, powód, polecenie i kod wyjścia, po jednym wierszu, zapisany przed otwarciem okienka.
 
 Ograniczenia: `rootwhy` nie wie, co zrobi skrypt po uruchomieniu — tylko jaki to plik i kto może go zmienić (ostrzega,

@@ -20,6 +20,7 @@ import os
 import pwd
 import re
 import shutil
+import signal
 import stat
 import subprocess
 import sys
@@ -27,7 +28,7 @@ import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 
-VERSION = "1.0.0"
+VERSION = "1.0.1"
 SECURE_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"  # sudo's default secure_path
 REASON_MIN, REASON_MAX = 10, 300
 EXPLAIN_MAX = 300
@@ -55,19 +56,20 @@ PL = {
     "Close": "Zamknij",
     "Wrong password — try again (attempt {n}).": "Błędne hasło — spróbuj ponownie (próba {n}).",
     "Working directory: {d}": "Katalog roboczy: {d}",
-    "Requested by: {c}": "Prosi: {c}",
+    "Requested via: {c} (the programs the request came through)": "Kto prosi: {c} (programy, przez które przyszła prośba)",
     "Preview — nothing will run.": "Podgląd — nic się nie wykona.",
     "Other notes from the requester:": "Inne uwagi proszącego:",
-    "Requester says": "Proszący podaje",
-    "claim, not verified": "deklaracja, niesprawdzona",
-    "Checked now": "Sprawdzone teraz",
+    "Explanation from the requester": "Wyjaśnienie od proszącego",
+    "rootwhy does not check it": "rootwhy tego nie sprawdza",
+    "What it is": "Co to jest",
+    "Current state (checked by rootwhy)": "Stan teraz (sprawdził rootwhy)",
     "Built-in": "Wbudowane",
     "command": "polecenie",
     "subcommand": "podpolecenie",
     "option": "opcja",
     "value of {o}": "wartość {o}",
     "argument": "argument",
-    "path": "ścieżka",
+    "path to a file or directory": "ścieżka do pliku lub katalogu",
     "directory": "katalog",
     "file": "plik",
     "symlink → {t}": "dowiązanie → {t}",
@@ -75,8 +77,9 @@ PL = {
     "does not exist yet (will be created)": "jeszcze nie istnieje (zostanie utworzony)",
     "does not exist, and neither does its parent directory": "nie istnieje, nie ma też katalogu nadrzędnego",
     "cannot be checked (no permission)": "nie da się sprawdzić (brak uprawnień)",
-    "owner {o}:{g}, {m}": "właściciel {o}:{g}, {m}",
+    "owner {o}, group {g}": "właściciel {o}, grupa {g}",
     "root will run {p}": "root uruchomi {p}",
+    "(the file {f})": "(to plik {f})",
     "not found in sudo's PATH": "nie ma w PATH sudo",
     "⚠ not owned by root or writable by others — could be changed before it runs":
         "⚠ właścicielem nie jest root albo inni mogą go zmieniać — może zostać podmieniony przed uruchomieniem",
@@ -94,8 +97,8 @@ PL = {
     "user {u} (UID {i})": "użytkownik {u} (UID {i})",
     "group {g} (GID {i})": "grupa {g} (GID {i})",
     "unknown user or group": "nieznany użytkownik lub grupa",
-    "permissions {r}: owner {o}; group {g}; others {x}": "prawa {r}: właściciel {o}; grupa {g}; pozostali {x}",
-    "read": "odczyt", "write": "zapis", "execute": "uruchamianie", "nothing": "nic",
+    "permissions: owner — {o}; group — {g}; others — {x} ({r})": "prawa: właściciel — {o}; grupa — {g}; pozostali — {x} ({r})",
+    "read": "odczyt", "write": "zapis", "execute": "uruchamianie", "enter": "wejście", "nothing": "nic",
     "⚠ setuid/setgid bit — runs with the owner's rights": "⚠ bit setuid/setgid — uruchamia się z prawami właściciela",
     "end of options — everything after is an argument": "koniec opcji — dalej same argumenty",
     "system configuration": "konfiguracja systemu",
@@ -396,6 +399,15 @@ def _looks_like_path(s: str) -> bool:
     return s.startswith(("/", "./", "../", "~")) or ("/" in s and not s.startswith("-") and "://" not in s)
 
 
+def _short_command(path: str) -> str:
+    """The bare name when sudo would find this very file by it (the full path is in the tooltip); otherwise the path —
+    also when the file is unsafe, so the warning stays next to what is shown."""
+    name = os.path.basename(path)
+    if path.startswith("/") and shutil.which(name, path=SECURE_PATH) == path and not _unsafe_for_root(path):
+        return name
+    return path
+
+
 def tokenize(argv: list[str], value_options: dict[str, set[str]] | None = None) -> list[Token]:
     """Split argv into display tokens. value_options: options known to take a value, per command name."""
     if not argv:
@@ -404,7 +416,7 @@ def tokenize(argv: list[str], value_options: dict[str, set[str]] | None = None) 
     takes = set(VALUE_OPTIONS.get(cmd, set()))
     if value_options:
         takes |= value_options.get(cmd, set())
-    tokens = [Token(shell_quote(argv[0]), "command", argv[0], 0)]
+    tokens = [Token(shell_quote(_short_command(argv[0])), "command", argv[0], 0)]
     sub_done = cmd not in SUBCOMMAND_TOOLS
     end_of_options = False
     i = 1
@@ -570,21 +582,26 @@ def man_info(cmd: str) -> tuple[str, dict[str, tuple[bool, str]]]:
     return result
 
 
+def describe_permissions(mode: int, directory: bool = False) -> str:
+    """Permission bits in words; for a directory the x bit means entering it."""
+    rwx = stat.filemode(stat.S_IMODE(mode) | (stat.S_IFDIR if directory else stat.S_IFREG))[1:]
+
+    def who(bits: int) -> str:
+        parts = [n for b, n in ((4, _("read")), (2, _("write")), (1, _("enter") if directory else _("execute")))
+                 if bits & b]
+        return ", ".join(parts) or _("nothing")
+
+    text = _("permissions: owner — {o}; group — {g}; others — {x} ({r})", r=rwx, o=who(mode >> 6 & 7),
+             g=who(mode >> 3 & 7), x=who(mode & 7))
+    if mode & 0o6000 and not directory:
+        text += "\n" + _("⚠ setuid/setgid bit — runs with the owner's rights")
+    return text
+
+
 def describe_mode(value: str) -> str | None:
     if not re.fullmatch(r"[0-7]{3,4}", value):
         return None
-    mode = int(value, 8)
-    rwx = stat.filemode(mode | stat.S_IFREG)[1:]
-
-    def who(bits: int) -> str:
-        parts = [n for b, n in ((4, _("read")), (2, _("write")), (1, _("execute"))) if bits & b]
-        return ", ".join(parts) or _("nothing")
-
-    text = _("permissions {r}: owner {o}; group {g}; others {x}", r=rwx, o=who(mode >> 6 & 7), g=who(mode >> 3 & 7),
-             x=who(mode & 7))
-    if mode & 0o6000:
-        text += "\n" + _("⚠ setuid/setgid bit — runs with the owner's rights")
-    return text
+    return describe_permissions(int(value, 8))
 
 
 def describe_owner(value: str) -> str:
@@ -641,7 +658,9 @@ def path_facts(path: str, cwd: str | None = None) -> list[str]:
             group = grp.getgrgid(st.st_gid).gr_name
         except KeyError:
             group = str(st.st_gid)
-        facts.append(f"{kind}; " + _("owner {o}:{g}, {m}", o=owner, g=group, m=stat.filemode(st.st_mode)))
+        facts.append(f"{kind}; " + _("owner {o}, group {g}", o=owner, g=group))
+        if not stat.S_ISLNK(st.st_mode):  # a symlink's own mode bits mean nothing
+            facts.append(describe_permissions(st.st_mode, stat.S_ISDIR(st.st_mode)))
     absolute = os.path.abspath(p)
     home = os.path.expanduser("~")
     if absolute.startswith(home.rstrip("/") + "/"):
@@ -727,7 +746,8 @@ def explain(tokens: list[Token], agent: dict[str, str] | None = None, cwd: str |
             if use_system:
                 resolved = _resolve_command(t.arg)
                 if resolved:
-                    system.append(_("root will run {p}", p=resolved))
+                    real = os.path.realpath(resolved)
+                    system.append(_("root will run {p}", p=resolved) + ("" if real == resolved else " " + _("(the file {f})", f=real)))
                     system += path_facts(resolved, cwd)
                     if _unsafe_for_root(resolved):
                         system.append(_("⚠ not owned by root or writable by others — could be changed before it runs"))
@@ -763,7 +783,7 @@ def explain(tokens: list[Token], agent: dict[str, str] | None = None, cwd: str |
         elif t.kind == "marker":
             builtin.append(_("end of options — everything after is an argument"))
         else:  # path / arg
-            label = _("path") if t.kind == "path" else _("argument")
+            label = _("path to a file or directory") if t.kind == "path" else _("argument")
             if t.role == "mode":
                 builtin.append(L("permissions", "prawa dostępu"))
                 mode = describe_mode(t.arg)
@@ -812,12 +832,13 @@ def tooltip_markup(token: Token) -> str:
     builtin = [x for s, x in token.notes if s == "builtin"]
     system = [x for s, x in token.notes if s == "system"]
     if agent:
-        sections.append(f"<b>{escape(_('Requester says'))}</b> <i>({escape(_('claim, not verified'))})</i>\n"
-                        + "\n".join(escape(x) for x in agent))
+        sections.append(f"<b>{escape(_('Explanation from the requester'))}</b> "
+                        f"<i>({escape(_('rootwhy does not check it'))})</i>\n" + "\n".join(escape(x) for x in agent))
     if builtin:
-        sections.append("\n".join(escape(x) for x in builtin))
+        sections.append(f"<b>{escape(_('What it is'))}</b>\n" + "\n".join(escape(x) for x in builtin))
     if system:
-        sections.append(f"<b>{escape(_('Checked now'))}</b>\n" + "\n".join(escape(x) for x in system))
+        sections.append(f"<b>{escape(_('Current state (checked by rootwhy)'))}</b>\n"
+                        + "\n".join(escape(x) for x in system))
     return "\n\n".join(sections) or escape(token.arg)
 
 
@@ -1018,7 +1039,7 @@ def gtk_dialog(req: Request) -> str | None:
         add(outer, label(_("Other notes from the requester:") + "\n" + "\n".join(f"• {x}" for x in leftover), "rw-dim"))
     meta = [_("Working directory: {d}", d=req.cwd)] if req.cwd else []
     if req.caller:
-        meta.append(_("Requested by: {c}", c=req.caller))
+        meta.append(_("Requested via: {c} (the programs the request came through)", c=req.caller))
     if meta:
         add(outer, label("\n".join(meta), "rw-dim"))
 
@@ -1138,10 +1159,27 @@ def fallback_dialog(req: Request) -> str | None:
     return out.stdout.rstrip("\n") if out.returncode == 0 else None
 
 
+def _gtk_quiet(req: Request) -> str | None:
+    """gtk_dialog with stderr muted: theme warnings (Gtk-WARNING …) are noise in the requester's terminal.
+    ROOTWHY_DEBUG=1 keeps them."""
+    if os.environ.get("ROOTWHY_DEBUG"):
+        return gtk_dialog(req)
+    sys.stderr.flush()
+    saved = os.dup(2)
+    devnull = os.open(os.devnull, os.O_WRONLY)
+    try:
+        os.dup2(devnull, 2)
+        return gtk_dialog(req)
+    finally:
+        os.dup2(saved, 2)
+        os.close(saved)
+        os.close(devnull)
+
+
 def show_dialog(req: Request) -> str | None:
     if os.environ.get("ROOTWHY_DIALOG") != "fallback":
         try:
-            return gtk_dialog(req)
+            return _gtk_quiet(req)
         except (ImportError, ValueError, RuntimeError, AttributeError):  # no GTK 4/3 or no display
             if req.screenshot:
                 raise
@@ -1211,7 +1249,7 @@ def _caller_chain(pid: int, depth: int = 3) -> str:
         pid = int(stat_line[stat_line.rindex(")") + 2:].split()[1])
         if pid <= 1:
             break
-    return " ← ".join(names)
+    return " → ".join(reversed(names))  # outermost program first
 
 
 def askpass_mode() -> int:
@@ -1246,6 +1284,9 @@ def askpass_mode() -> int:
     if password is None:
         if state:
             Path(state).write_text("cancelled")
+            # sudo would print "no password was provided"; it has run nothing yet, so end it quietly — the parent
+            # rootwhy reports the cancel (sudo_parent_command checked that the parent is our sudo)
+            os.kill(os.getppid(), signal.SIGKILL)
         return 1
     sys.stdout.write(password + "\n")
     sys.stdout.flush()
