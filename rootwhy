@@ -335,9 +335,11 @@ def man_info(cmd: str) -> tuple[str, dict[str, tuple[bool, str]]]:
         # only root-owned system pages, clean environment: the requester runs as this user and could otherwise plant a
         # page (~/.local/share/man, ~/.manpath, MANPATH…) that describes `rm -rf` as harmless
         env = {k: v for k, v in os.environ.items() if k in ("LANG", "LANGUAGE") or k.startswith("LC_")}
-        env.update(PATH=SECURE_PATH, HOME="/nonexistent", MANWIDTH="400", MANPAGER="cat", PAGER="cat")
+        # MANPATH rather than -M: with -M man-db skips the translated pages (/usr/share/man/pl…)
+        env.update(PATH=SECURE_PATH, HOME="/nonexistent", MANPATH=":".join(dirs), MANWIDTH="400", MANPAGER="cat",
+                   PAGER="cat")
         try:
-            out = subprocess.run([man, "-C", "/etc/man_db.conf", "-M", ":".join(dirs), "-P", "cat", "--", cmd],
+            out = subprocess.run([man, "-C", "/etc/man_db.conf", "-P", "cat", "--", cmd],
                                  check=False, capture_output=True, text=True, timeout=4, env=env,
                                  stdin=subprocess.DEVNULL, cwd="/")
             if out.returncode == 0:
