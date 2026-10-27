@@ -187,6 +187,7 @@ class Security(unittest.TestCase):
         self.assertEqual(rw.parse_sudo_cmdline(b"/usr/bin/sudo\0-k\0-A\0--\0/usr/bin/true\0"), ["/usr/bin/true"])
         self.assertEqual(rw.parse_sudo_cmdline(b"sudo\0-k\0-A\0--\0/bin/rm\0-rf\0/x\0"), ["/bin/rm", "-rf", "/x"])
         self.assertIsNone(rw.parse_sudo_cmdline(b"sudo\0-k\0-A\0--\0rm\0/x\0"))       # bare name
+        self.assertIsNone(rw.parse_sudo_cmdline(b"sudo\0-k\0-A\0--\0/tmp/l/../bin/rm\0"))  # not normalised
         self.assertIsNone(rw.parse_sudo_cmdline(b"sudo\0-A\0--\0true\0"))         # without -k
         self.assertIsNone(rw.parse_sudo_cmdline(b"sudo\0-k\0-A\0--\0"))           # no command
         self.assertIsNone(rw.parse_sudo_cmdline(b"/tmp/fake\0-k\0-A\0--\0true\0"))  # not sudo
@@ -201,6 +202,7 @@ class Security(unittest.TestCase):
             f.write_text("#!/bin/sh\n")
             self.assertTrue(rw._unsafe_for_root(str(f)))           # owned by this user
         self.assertTrue(rw._unsafe_for_root("/nonexistent/xyz"))   # errors count as unsafe
+        self.assertTrue(rw._unsafe_for_root("/tmp/../usr/bin/true"))  # ".." counts as unsafe
         with tempfile.TemporaryDirectory() as d:
             link = Path(d, "true")
             link.symlink_to("/usr/bin/true")

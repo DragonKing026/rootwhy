@@ -664,6 +664,8 @@ def _unsafe_for_root(path: str) -> bool:
     """True when someone other than root could replace what runs: the file or any directory on its real path is not
     owned by root, or is writable by group/others (a sticky directory such as /tmp counts only for its own entries'
     owners). Errors count as unsafe."""
+    if ".." in Path(path).parts:  # abspath would cancel "link/.." lexically, the kernel would follow the link
+        return True
     try:
         # both the path as given (its symlinks and their directories) and where the symlinks lead
         for target in (Path(os.path.abspath(path)), Path(os.path.realpath(path))):
@@ -1065,7 +1067,7 @@ def parse_sudo_cmdline(raw: bytes) -> list[str] | None:
     if parts and parts[-1] == "":
         parts.pop()
     if len(parts) < 5 or os.path.basename(parts[0]) != "sudo" or parts[1:4] != ["-k", "-A", "--"] \
-            or not parts[4].startswith("/"):
+            or not parts[4].startswith("/") or os.path.normpath(parts[4]) != parts[4]:
         return None
     return parts[4:]
 
@@ -1227,6 +1229,8 @@ def main_mode(args: list[str]) -> int:
             print(_("rootwhy: command not found: {c}", c=ns.command[0]), file=sys.stderr)
             return 127
         ns.command[0] = resolved
+    elif not ns.command[0].startswith("/") or os.path.normpath(ns.command[0]) != ns.command[0]:
+        ns.command[0] = os.path.realpath(ns.command[0])  # ./x, a/../b: the file the kernel would really run
     command = " ".join(shell_quote(a) for a in ns.command)
     log_dir = Path(ns.log_dir) if ns.log_dir else \
         Path(os.environ.get("XDG_STATE_HOME") or Path.home() / ".local/state") / "rootwhy"
