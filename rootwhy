@@ -665,14 +665,19 @@ def _unsafe_for_root(path: str) -> bool:
     owned by root, or is writable by group/others (a sticky directory such as /tmp counts only for its own entries'
     owners). Errors count as unsafe."""
     try:
-        real = Path(os.path.realpath(path))
-        for part in [real, *real.parents]:
-            st = os.lstat(part)
-            writable = st.st_mode & (stat.S_IWGRP | stat.S_IWOTH)
-            if part != real and stat.S_ISDIR(st.st_mode) and st.st_mode & stat.S_ISVTX:
-                writable = 0  # sticky: others cannot replace entries they do not own
-            if st.st_uid != 0 or writable:
-                return True
+        # both the path as given (its symlinks and their directories) and where the symlinks lead
+        for target in (Path(os.path.abspath(path)), Path(os.path.realpath(path))):
+            for part in [target, *target.parents]:
+                st = os.lstat(part)
+                if stat.S_ISLNK(st.st_mode):
+                    if st.st_uid != 0:
+                        return True
+                    continue  # a symlink's own mode bits mean nothing; its directory is checked next
+                writable = st.st_mode & (stat.S_IWGRP | stat.S_IWOTH)
+                if part != target and stat.S_ISDIR(st.st_mode) and st.st_mode & stat.S_ISVTX:
+                    writable = 0  # sticky: others cannot replace entries they do not own
+                if st.st_uid != 0 or writable:
+                    return True
     except OSError:
         return True
     return False
@@ -1054,11 +1059,13 @@ SAFE_ENV = ("DISPLAY", "WAYLAND_DISPLAY", "XAUTHORITY", "XDG_RUNTIME_DIR", "XDG_
 
 
 def parse_sudo_cmdline(raw: bytes) -> list[str] | None:
-    """The command from the parent's /proc cmdline, only for the exact form rootwhy uses: sudo -k -A -- command…"""
+    """The command from the parent's /proc cmdline, only for the exact form rootwhy uses: sudo -k -A -- /abs/command…
+    (an absolute path, so the dialog cannot resolve a bare name differently than sudo does)"""
     parts = raw.decode("utf-8", "surrogateescape").split("\0")
     if parts and parts[-1] == "":
         parts.pop()
-    if len(parts) < 5 or os.path.basename(parts[0]) != "sudo" or parts[1:4] != ["-k", "-A", "--"]:
+    if len(parts) < 5 or os.path.basename(parts[0]) != "sudo" or parts[1:4] != ["-k", "-A", "--"] \
+            or not parts[4].startswith("/"):
         return None
     return parts[4:]
 
