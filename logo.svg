@@ -1,0 +1,25 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256">
+  <title>rootwhy</title>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#1a5fb4"/>
+      <stop offset="1" stop-color="#613583"/>
+    </linearGradient>
+    <linearGradient id="mark" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#1a5fb4"/>
+      <stop offset="1" stop-color="#613583"/>
+    </linearGradient>
+  </defs>
+  <rect x="8" y="8" width="240" height="240" rx="56" fill="url(#bg)"/>
+  <!-- shackle -->
+  <path d="M86 118 V90 a42 42 0 0 1 84 0 V118" fill="none" stroke="#ffffff" stroke-width="20" stroke-linecap="round"/>
+  <!-- lock body -->
+  <rect x="58" y="108" width="140" height="108" rx="24" fill="#ffffff"/>
+  <!-- question mark instead of a keyhole -->
+  <path d="M111 146 a17 17 0 1 1 26 14.5 c-6.5 4 -9 7.5 -9 14.5 v3" fill="none" stroke="url(#mark)" stroke-width="13"
+        stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="128" cy="197" r="7.5" fill="url(#mark)"/>
+  <!-- root prompt -->
+  <text x="184" y="62" font-family="DejaVu Sans Mono, Menlo, Consolas, monospace" font-size="34" font-weight="bold"
+        fill="#ffffff" fill-opacity="0.85" text-anchor="middle">#</text>
+</svg>

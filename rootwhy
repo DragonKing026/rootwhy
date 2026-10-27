@@ -1,0 +1,1195 @@
+#!/usr/bin/python3
+# SPDX-License-Identifier: GPL-3.0-or-later
+# rootwhy — run a command with sudo after a password dialog that explains why and what it does.
+# https://github.com/DragonKing026/rootwhy
+"""rootwhy: sudo with a password dialog that shows the reason, the command split into coloured parts and
+an explanation of every part on hover.
+
+Two modes in one file:
+  * main mode   — parses arguments, writes the log, runs `sudo -k -A -- command…` with this file as SUDO_ASKPASS;
+  * askpass mode — started by sudo (ROOTWHY_MODE=askpass): shows the dialog, prints the password to stdout.
+The password goes from the dialog straight to sudo; the caller (e.g. an AI agent) never sees it.
+"""
+from __future__ import annotations
+
+import argparse
+import datetime as _dt
+import grp
+import json
+import os
+import pwd
+import re
+import shutil
+import stat
+import subprocess
+import sys
+import tempfile
+from dataclasses import dataclass, field
+from pathlib import Path
+
+VERSION = "0.1.0"
+SECURE_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"  # sudo's default secure_path
+REASON_MIN, REASON_MAX = 10, 300
+EXPLAIN_MAX = 300
+ONE_LINE_MAX = 70  # commands up to this many characters stay on one line
+
+
+# ── language ────────────────────────────────────────────────────────────────────────────────────────────────
+
+def _lang() -> str:
+    for var in ("ROOTWHY_LANG", "LANGUAGE", "LC_ALL", "LC_MESSAGES", "LANG"):
+        value = os.environ.get(var, "")
+        if value:
+            return "pl" if value.split(":")[0].lower().startswith("pl") else "en"
+    return "en"
+
+
+LANG = _lang()
+
+PL = {
+    "Administrator access": "Uprawnienia administratora",
+    "Command (hover over a part for an explanation):": "Polecenie (najedź na fragment, żeby zobaczyć wyjaśnienie):",
+    "Password:": "Hasło:",
+    "Cancel": "Anuluj",
+    "Authorize": "Zatwierdź",
+    "Close": "Zamknij",
+    "Wrong password — try again (attempt {n}).": "Błędne hasło — spróbuj ponownie (próba {n}).",
+    "Working directory: {d}": "Katalog roboczy: {d}",
+    "Requested by: {c}": "Prosi: {c}",
+    "Preview — nothing will run.": "Podgląd — nic się nie wykona.",
+    "Other notes from the requester:": "Inne uwagi proszącego:",
+    "Requester says": "Proszący podaje",
+    "claim, not verified": "deklaracja, niesprawdzona",
+    "Checked now": "Sprawdzone teraz",
+    "Built-in": "Wbudowane",
+    "command": "polecenie",
+    "subcommand": "podpolecenie",
+    "option": "opcja",
+    "value of {o}": "wartość {o}",
+    "argument": "argument",
+    "path": "ścieżka",
+    "directory": "katalog",
+    "file": "plik",
+    "symlink → {t}": "dowiązanie → {t}",
+    "special file": "plik specjalny",
+    "does not exist yet (will be created)": "jeszcze nie istnieje (zostanie utworzony)",
+    "does not exist, and neither does its parent directory": "nie istnieje, nie ma też katalogu nadrzędnego",
+    "cannot be checked (no permission)": "nie da się sprawdzić (brak uprawnień)",
+    "owner {o}:{g}, {m}": "właściciel {o}:{g}, {m}",
+    "root will run {p}": "root uruchomi {p}",
+    "not found in sudo's PATH": "nie ma w PATH sudo",
+    "⚠ not owned by root or writable by others — could be changed before it runs":
+        "⚠ właścicielem nie jest root albo inni mogą go zmieniać — może zostać podmieniony przed uruchomieniem",
+    "⚠ an existing file — it will be replaced": "⚠ plik istnieje — zostanie zastąpiony",
+    "files will be placed in this directory": "pliki trafią do tego katalogu",
+    "source": "źródło",
+    "destination": "cel",
+    "link target (what the link points to)": "cel dowiązania (na co ma wskazywać)",
+    "name of the link to create": "nazwa tworzonego dowiązania",
+    "will be deleted": "zostanie usunięte",
+    "script that will run as root": "skrypt, który wykona się jako root",
+    "package": "pakiet",
+    "systemd unit": "jednostka systemd",
+    "unit: {d}": "jednostka: {d}",
+    "user {u} (UID {i})": "użytkownik {u} (UID {i})",
+    "group {g} (GID {i})": "grupa {g} (GID {i})",
+    "unknown user or group": "nieznany użytkownik lub grupa",
+    "permissions {r}: owner {o}; group {g}; others {x}": "prawa {r}: właściciel {o}; grupa {g}; pozostali {x}",
+    "read": "odczyt", "write": "zapis", "execute": "uruchamianie", "nothing": "nic",
+    "⚠ setuid/setgid bit — runs with the owner's rights": "⚠ bit setuid/setgid — uruchamia się z prawami właściciela",
+    "end of options — everything after is an argument": "koniec opcji — dalej same argumenty",
+    "system configuration": "konfiguracja systemu",
+    "programs installed locally for all users": "programy zainstalowane lokalnie dla wszystkich użytkowników",
+    "system files managed by the package manager": "pliki systemu zarządzane przez menedżer pakietów",
+    "boot files (kernel, bootloader)": "pliki rozruchu (jądro, bootloader)",
+    "systemd units and configuration": "jednostki i konfiguracja systemd",
+    "temporary files": "pliki tymczasowe",
+    "in your home directory": "w Twoim katalogu domowym",
+    "optional software": "dodatkowe oprogramowanie",
+    "variable data (logs, caches, databases)": "dane zmienne (logi, cache, bazy)",
+    "rootwhy: reason (-r) is required, {a}–{b} characters": "rootwhy: powód (-r) jest wymagany, {a}–{b} znaków",
+    "rootwhy: no command given": "rootwhy: brak polecenia",
+    "rootwhy: no graphical session for the dialog": "rootwhy: brak sesji graficznej na okienko",
+    "rootwhy: bad --explain, expected FRAGMENT=TEXT: {e}": "rootwhy: złe --explain, oczekiwano FRAGMENT=TEKST: {e}",
+    "rootwhy: cancelled by the user": "rootwhy: anulowane przez użytkownika",
+    "rootwhy: askpass mode is only for sudo -A": "rootwhy: tryb hasła tylko dla sudo -A",
+    "rootwhy: no dialog available (GTK 4, kdialog or zenity)": "rootwhy: brak okienka (GTK 4, kdialog lub zenity)",
+}
+
+
+def _(text: str, **kw) -> str:
+    out = PL.get(text, text) if LANG == "pl" else text
+    return out.format(**kw) if kw else out
+
+
+def L(en: str, pl: str) -> str:
+    return pl if LANG == "pl" else en
+
+
+# ── built-in knowledge (short, plain-language) ──────────────────────────────────────────────────────────────
+
+COMMANDS = {
+    "install": ("copies files and sets their permissions and owner", "kopiuje pliki i ustawia im prawa i właściciela"),
+    "cp": ("copies files", "kopiuje pliki"),
+    "mv": ("moves or renames files", "przenosi albo zmienia nazwę plików"),
+    "rm": ("deletes files", "usuwa pliki"),
+    "ln": ("creates links between files", "tworzy dowiązania"),
+    "mkdir": ("creates directories", "tworzy katalogi"),
+    "rmdir": ("removes empty directories", "usuwa puste katalogi"),
+    "chmod": ("changes permissions", "zmienia prawa dostępu"),
+    "chown": ("changes owner and group", "zmienia właściciela i grupę"),
+    "chgrp": ("changes group", "zmienia grupę"),
+    "touch": ("creates a file or updates its time", "tworzy plik albo zmienia jego czas"),
+    "tee": ("writes its input to files", "zapisuje wejście do plików"),
+    "cat": ("prints file contents", "wypisuje zawartość plików"),
+    "sed": ("edits text (with -i: files in place)", "edytuje tekst (z -i: pliki na miejscu)"),
+    "systemctl": ("controls systemd services", "steruje usługami systemd"),
+    "journalctl": ("reads the system log", "czyta dziennik systemowy"),
+    "dnf": ("package manager (Fedora)", "menedżer pakietów (Fedora)"),
+    "dnf5": ("package manager (Fedora)", "menedżer pakietów (Fedora)"),
+    "apt": ("package manager (Debian, Ubuntu)", "menedżer pakietów (Debian, Ubuntu)"),
+    "apt-get": ("package manager (Debian, Ubuntu)", "menedżer pakietów (Debian, Ubuntu)"),
+    "rpm": ("low-level RPM package tool", "niskopoziomowe narzędzie pakietów RPM"),
+    "dpkg": ("low-level Debian package tool", "niskopoziomowe narzędzie pakietów Debiana"),
+    "flatpak": ("Flatpak application manager", "menedżer aplikacji Flatpak"),
+    "snap": ("Snap package manager", "menedżer pakietów Snap"),
+    "bash": ("runs a Bash script or command", "uruchamia skrypt albo polecenie Bash"),
+    "sh": ("runs a shell script or command", "uruchamia skrypt albo polecenie powłoki"),
+    "env": ("runs a command with changed environment", "uruchamia polecenie ze zmienionym środowiskiem"),
+    "mount": ("mounts a filesystem", "montuje system plików"),
+    "umount": ("unmounts a filesystem", "odmontowuje system plików"),
+    "usermod": ("changes a user account", "zmienia konto użytkownika"),
+    "useradd": ("creates a user account", "tworzy konto użytkownika"),
+    "groupadd": ("creates a group", "tworzy grupę"),
+    "passwd": ("changes a password", "zmienia hasło"),
+    "modprobe": ("loads or removes a kernel module", "ładuje albo usuwa moduł jądra"),
+    "sysctl": ("reads or sets kernel parameters", "czyta albo ustawia parametry jądra"),
+    "firewall-cmd": ("configures firewalld", "konfiguruje zaporę firewalld"),
+    "ufw": ("configures the firewall (Ubuntu)", "konfiguruje zaporę (Ubuntu)"),
+    "kill": ("sends a signal to a process", "wysyła sygnał do procesu"),
+    "pkill": ("signals processes by name", "wysyła sygnał procesom po nazwie"),
+    "reboot": ("restarts the computer", "uruchamia komputer ponownie"),
+    "shutdown": ("shuts down the computer", "wyłącza komputer"),
+    "true": ("does nothing and succeeds", "nic nie robi i kończy się sukcesem"),
+    "restorecon": ("restores SELinux labels", "przywraca etykiety SELinux"),
+    "setsebool": ("sets an SELinux boolean", "ustawia przełącznik SELinux"),
+    "hostnamectl": ("sets the hostname", "ustawia nazwę komputera"),
+    "timedatectl": ("sets time and time zone", "ustawia czas i strefę czasową"),
+    "loginctl": ("controls login sessions", "steruje sesjami logowania"),
+    "tailscale": ("controls Tailscale VPN", "steruje VPN Tailscale"),
+    "docker": ("controls Docker containers", "steruje kontenerami Dockera"),
+    "podman": ("controls Podman containers", "steruje kontenerami Podmana"),
+    "efibootmgr": ("changes UEFI boot entries", "zmienia wpisy rozruchu UEFI"),
+}
+
+SUBCOMMAND_TOOLS = {"systemctl", "dnf", "dnf5", "apt", "apt-get", "flatpak", "snap", "tailscale", "docker", "podman",
+                    "loginctl", "hostnamectl", "timedatectl", "firewall-cmd", "ufw"}
+
+_PKG = {
+    "install": ("installs packages", "instaluje pakiety"),
+    "remove": ("removes packages", "usuwa pakiety"),
+    "erase": ("removes packages", "usuwa pakiety"),
+    "purge": ("removes packages with their configuration", "usuwa pakiety razem z konfiguracją"),
+    "upgrade": ("upgrades packages", "aktualizuje pakiety"),
+    "update": ("updates packages / package lists", "aktualizuje pakiety / listy pakietów"),
+    "full-upgrade": ("upgrades, removing packages if needed", "aktualizuje, w razie potrzeby usuwając pakiety"),
+    "dist-upgrade": ("upgrades, removing packages if needed", "aktualizuje, w razie potrzeby usuwając pakiety"),
+    "reinstall": ("reinstalls packages", "instaluje pakiety ponownie"),
+    "autoremove": ("removes packages nobody needs", "usuwa niepotrzebne pakiety"),
+    "downgrade": ("installs an older version", "instaluje starszą wersję"),
+    "swap": ("replaces one package with another", "zamienia jeden pakiet na drugi"),
+    "makecache": ("downloads repository metadata", "pobiera metadane repozytoriów"),
+    "refresh": ("updates snaps", "aktualizuje snapy"),
+    "uninstall": ("removes applications", "usuwa aplikacje"),
+    "remote-add": ("adds a repository", "dodaje repozytorium"),
+    "override": ("changes app permissions", "zmienia uprawnienia aplikacji"),
+}
+SUBCOMMANDS = {
+    "systemctl": {
+        "start": ("starts the unit now", "uruchamia jednostkę teraz"),
+        "stop": ("stops the unit", "zatrzymuje jednostkę"),
+        "restart": ("stops and starts the unit", "zatrzymuje i uruchamia jednostkę"),
+        "reload": ("reloads the unit's configuration", "przeładowuje konfigurację jednostki"),
+        "enable": ("starts the unit at boot", "włącza jednostkę przy starcie systemu"),
+        "disable": ("no longer starts the unit at boot", "wyłącza start jednostki przy starcie systemu"),
+        "mask": ("blocks the unit from starting at all", "całkowicie blokuje start jednostki"),
+        "unmask": ("unblocks a masked unit", "odblokowuje zablokowaną jednostkę"),
+        "daemon-reload": ("re-reads unit files after a change", "wczytuje pliki jednostek po zmianie"),
+        "edit": ("edits a unit (drop-in override)", "edytuje jednostkę (plik nadpisujący)"),
+        "status": ("shows the unit's status", "pokazuje stan jednostki"),
+        "kill": ("sends a signal to the unit's processes", "wysyła sygnał procesom jednostki"),
+    },
+    "dnf": _PKG, "dnf5": _PKG, "apt": _PKG, "apt-get": _PKG, "flatpak": _PKG, "snap": _PKG,
+    "tailscale": {
+        "up": ("connects to the tailnet", "łączy z tailnetem"),
+        "down": ("disconnects", "rozłącza"),
+        "set": ("changes settings", "zmienia ustawienia"),
+        "serve": ("shares a local service in the tailnet", "udostępnia lokalną usługę w tailnecie"),
+    },
+}
+
+_UNIT_SUBS = {"start", "stop", "restart", "reload", "enable", "disable", "mask", "unmask", "edit", "status", "kill"}
+_PKG_SUBS = {"install", "remove", "erase", "purge", "reinstall", "downgrade", "swap", "upgrade", "update", "uninstall"}
+
+# options per command: {command: {(aliases…): (en, pl)}}; "*" marks options that take a value
+_O = {
+    "install": {
+        ("-m*", "--mode*"): ("set permissions (as chmod)", "ustawia prawa dostępu (jak chmod)"),
+        ("-o*", "--owner*"): ("set the owner", "ustawia właściciela"),
+        ("-g*", "--group*"): ("set the group", "ustawia grupę"),
+        ("-d", "--directory"): ("create directories instead of copying", "tworzy katalogi zamiast kopiować"),
+        ("-D",): ("also create missing parent directories", "tworzy też brakujące katalogi nadrzędne"),
+        ("-t*", "--target-directory*"): ("copy into this directory", "kopiuje do tego katalogu"),
+        ("-p", "--preserve-timestamps"): ("keep file times", "zachowuje czasy plików"),
+        ("-b",): ("back up existing files", "robi kopię istniejących plików"),
+        ("-C", "--compare"): ("skip unchanged files", "pomija niezmienione pliki"),
+        ("-v", "--verbose"): ("print what is done", "wypisuje, co robi"),
+    },
+    "cp": {
+        ("-r", "-R", "--recursive"): ("copy directories with contents", "kopiuje katalogi z zawartością"),
+        ("-a", "--archive"): ("copy everything, keeping attributes", "kopiuje wszystko, zachowując atrybuty"),
+        ("-p",): ("keep mode, owner and times", "zachowuje prawa, właściciela i czasy"),
+        ("-f", "--force"): ("overwrite without asking", "nadpisuje bez pytania"),
+        ("-i", "--interactive"): ("ask before overwriting", "pyta przed nadpisaniem"),
+        ("-n", "--no-clobber"): ("never overwrite", "nigdy nie nadpisuje"),
+        ("-t*", "--target-directory*"): ("copy into this directory", "kopiuje do tego katalogu"),
+        ("-v", "--verbose"): ("print what is done", "wypisuje, co robi"),
+    },
+    "mv": {
+        ("-f", "--force"): ("overwrite without asking", "nadpisuje bez pytania"),
+        ("-i", "--interactive"): ("ask before overwriting", "pyta przed nadpisaniem"),
+        ("-n", "--no-clobber"): ("never overwrite", "nigdy nie nadpisuje"),
+        ("-t*", "--target-directory*"): ("move into this directory", "przenosi do tego katalogu"),
+        ("-v", "--verbose"): ("print what is done", "wypisuje, co robi"),
+    },
+    "rm": {
+        ("-r", "-R", "--recursive"): ("delete directories with all contents", "usuwa katalogi z całą zawartością"),
+        ("-f", "--force"): ("never ask, ignore missing files", "nie pyta, pomija brakujące pliki"),
+        ("-i",): ("ask before each deletion", "pyta przed każdym usunięciem"),
+        ("-v", "--verbose"): ("print what is done", "wypisuje, co robi"),
+    },
+    "ln": {
+        ("-s", "--symbolic"): ("symbolic link", "dowiązanie symboliczne"),
+        ("-f", "--force"): ("replace an existing link or file", "zastępuje istniejące dowiązanie albo plik"),
+        ("-n", "--no-dereference"): ("treat a link to a directory as a file", "dowiązanie do katalogu traktuje jak plik"),
+        ("-r", "--relative"): ("make the link relative", "tworzy dowiązanie względne"),
+        ("-t*", "--target-directory*"): ("create links in this directory", "tworzy dowiązania w tym katalogu"),
+        ("-v", "--verbose"): ("print what is done", "wypisuje, co robi"),
+    },
+    "mkdir": {
+        ("-p", "--parents"): ("also create parents, no error if it exists", "tworzy też nadrzędne, bez błędu, gdy istnieje"),
+        ("-m*", "--mode*"): ("set permissions", "ustawia prawa dostępu"),
+        ("-v", "--verbose"): ("print what is done", "wypisuje, co robi"),
+    },
+    "chmod": {("-R", "--recursive"): ("also everything inside directories", "także wszystko w katalogach"),
+              ("-v", "--verbose"): ("print what is done", "wypisuje, co robi")},
+    "chown": {("-R", "--recursive"): ("also everything inside directories", "także wszystko w katalogach"),
+              ("-h", "--no-dereference"): ("change the link itself", "zmienia samo dowiązanie"),
+              ("-v", "--verbose"): ("print what is done", "wypisuje, co robi")},
+    "tee": {("-a", "--append"): ("append instead of overwriting", "dopisuje zamiast nadpisywać")},
+    "sed": {("-i", "--in-place"): ("edit files in place", "zmienia pliki na miejscu"),
+            ("-e*", "--expression*"): ("editing script", "skrypt edycji"),
+            ("-E", "-r", "--regexp-extended"): ("extended regular expressions", "rozszerzone wyrażenia regularne"),
+            ("-n", "--quiet"): ("print only what is asked", "wypisuje tylko to, o co poproszono")},
+    "systemctl": {("--now",): ("also start/stop it right away", "od razu także uruchamia/zatrzymuje"),
+                  ("-q", "--quiet"): ("less output", "mniej komunikatów"),
+                  ("--no-block",): ("do not wait for the result", "nie czeka na wynik"),
+                  ("-f", "--force"): ("force the operation", "wymusza operację")},
+    "dnf": {("-y", "--assumeyes"): ("answer yes to all questions", "odpowiada „tak” na wszystkie pytania"),
+            ("--refresh",): ("refresh metadata first", "najpierw odświeża metadane"),
+            ("--setopt*",): ("override a configuration option", "nadpisuje opcję konfiguracji"),
+            ("--repo*",): ("use only this repository", "używa tylko tego repozytorium")},
+    "apt": {("-y", "--yes"): ("answer yes to all questions", "odpowiada „tak” na wszystkie pytania"),
+            ("--no-install-recommends",): ("skip recommended packages", "pomija pakiety zalecane")},
+    "usermod": {("-a", "--append"): ("add to groups (keep the others)", "dodaje do grup (zachowuje pozostałe)"),
+                ("-G*", "--groups*"): ("supplementary groups", "grupy dodatkowe"),
+                ("-s*", "--shell*"): ("login shell", "powłoka logowania"),
+                ("-d*", "--home*"): ("home directory", "katalog domowy"),
+                ("-L", "--lock"): ("lock the account", "blokuje konto"),
+                ("-U", "--unlock"): ("unlock the account", "odblokowuje konto")},
+    "mount": {("-t*", "--types*"): ("filesystem type", "typ systemu plików"),
+              ("-o*", "--options*"): ("mount options", "opcje montowania")},
+    "sysctl": {("-w", "--write"): ("set a value", "ustawia wartość"),
+               ("-p*", "--load*"): ("load settings from a file", "wczytuje ustawienia z pliku")},
+    "journalctl": {("-u*", "--unit*"): ("only this unit", "tylko ta jednostka"),
+                   ("-n*", "--lines*"): ("number of lines", "liczba wierszy"),
+                   ("-b", "--boot"): ("only this boot", "tylko bieżący rozruch"),
+                   ("-f", "--follow"): ("follow new entries", "śledzi nowe wpisy")},
+    "flatpak": {("--system",): ("system-wide installation", "instalacja dla całego systemu"),
+                ("--user",): ("installation for your user", "instalacja dla Twojego użytkownika"),
+                ("-y", "--assumeyes"): ("answer yes to all questions", "odpowiada „tak” na wszystkie pytania")},
+    "bash": {("-c*",): ("run this command text", "uruchamia ten tekst polecenia"),
+             ("-x",): ("print each command as it runs", "wypisuje każde wykonywane polecenie"),
+             ("-e",): ("stop at the first error", "kończy przy pierwszym błędzie")},
+}
+_O["dnf5"] = _O["dnf"]
+_O["apt-get"] = _O["apt"]
+_O["sh"] = _O["bash"]
+_O["chgrp"] = _O["chown"]
+
+OPTIONS: dict[str, dict[str, tuple[str, str]]] = {}
+VALUE_OPTIONS: dict[str, set[str]] = {}
+for _cmd, _table in _O.items():
+    for _aliases, _text in _table.items():
+        for _alias in _aliases:
+            _name = _alias.rstrip("*")
+            OPTIONS.setdefault(_cmd, {})[_name] = _text
+            if _alias.endswith("*"):
+                VALUE_OPTIONS.setdefault(_cmd, set()).add(_name)
+
+LOCATIONS = [  # longest match first
+    ("/usr/local/bin/", "programs installed locally for all users"),
+    ("/usr/local/sbin/", "programs installed locally for all users"),
+    ("/etc/systemd/", "systemd units and configuration"),
+    ("/usr/lib/systemd/", "systemd units and configuration"),
+    ("/etc/", "system configuration"),
+    ("/usr/local/", "programs installed locally for all users"),
+    ("/usr/", "system files managed by the package manager"),
+    ("/boot/", "boot files (kernel, bootloader)"),
+    ("/opt/", "optional software"),
+    ("/var/", "variable data (logs, caches, databases)"),
+    ("/tmp/", "temporary files"),
+]
+
+
+# ── command model ───────────────────────────────────────────────────────────────────────────────────────────
+
+@dataclass
+class Token:
+    shown: str              # what the dialog shows (quoted, control characters made visible)
+    kind: str               # command | subcommand | option | value | path | arg | marker
+    arg: str = ""           # the original argument (for a joined value: just the value)
+    index: int = 0          # position in argv
+    option: str = ""        # for options and their values: the option name
+    role: str = ""          # e.g. source / destination / package / unit
+    joined: bool = False    # no space before this token (value of --opt=value)
+    notes: list[tuple[str, str]] = field(default_factory=list)  # (source, text) — filled by explain()
+
+
+# zero-width and bidirectional-control characters: printable for Python, invisible (or misleading) on screen
+INVISIBLE = {0x200B, 0x200C, 0x200D, 0x2060, 0xFEFF, *range(0x202A, 0x202F), *range(0x2066, 0x206A)}
+
+
+def shell_quote(s: str) -> str:
+    """Quote like a shell would need, and make invisible/control characters visible ($'…' form)."""
+    if s and re.fullmatch(r"[\w@%+=:,./~-]+", s, re.ASCII):
+        return s
+    if any(not ch.isprintable() or ord(ch) in INVISIBLE for ch in s):
+        out = []
+        for ch in s:
+            if ch == "\\" or ch == "'":
+                out.append("\\" + ch)
+            elif ch == "\n":
+                out.append("\\n")
+            elif ch == "\t":
+                out.append("\\t")
+            elif not ch.isprintable() or ord(ch) in INVISIBLE:
+                out.append(f"\\x{ord(ch):02x}" if ord(ch) < 0x100 else f"\\u{ord(ch):04x}")
+            else:
+                out.append(ch)
+        return "$'" + "".join(out) + "'"
+    return "'" + s.replace("'", "'\\''") + "'"
+
+
+def _looks_like_path(s: str) -> bool:
+    return s.startswith(("/", "./", "../", "~")) or ("/" in s and not s.startswith("-") and "://" not in s)
+
+
+def tokenize(argv: list[str], value_options: dict[str, set[str]] | None = None) -> list[Token]:
+    """Split argv into display tokens. value_options: options known to take a value, per command name."""
+    if not argv:
+        return []
+    cmd = os.path.basename(argv[0])
+    takes = set(VALUE_OPTIONS.get(cmd, set()))
+    if value_options:
+        takes |= value_options.get(cmd, set())
+    tokens = [Token(shell_quote(argv[0]), "command", argv[0], 0)]
+    sub_done = cmd not in SUBCOMMAND_TOOLS
+    end_of_options = False
+    i = 1
+    while i < len(argv):
+        a = argv[i]
+        if not end_of_options and a == "--":
+            tokens.append(Token("--", "marker", a, i))
+            end_of_options = True
+        elif not end_of_options and a.startswith("--") and len(a) > 2:
+            name, eq, value = a.partition("=")
+            if eq:
+                tokens.append(Token(shell_quote(name + "="), "option", a, i, name))
+                tokens.append(Token(shell_quote(value), "value", value, i, name, joined=True))
+            else:
+                tokens.append(Token(shell_quote(a), "option", a, i, a))
+                if a in takes and i + 1 < len(argv):
+                    i += 1
+                    tokens.append(Token(shell_quote(argv[i]), "value", argv[i], i, a))
+        elif not end_of_options and a.startswith("-") and len(a) > 1 and not re.fullmatch(r"-\d+", a):
+            short = a[:2]
+            if short in takes and len(a) > 2:
+                tokens.append(Token(shell_quote(short), "option", a, i, short))
+                tokens.append(Token(shell_quote(a[2:]), "value", a[2:], i, short, joined=True))
+            else:
+                tokens.append(Token(shell_quote(a), "option", a, i, a))
+                last = "-" + a[-1]
+                if (a in takes or (len(a) > 2 and last in takes)) and i + 1 < len(argv):
+                    i += 1
+                    tokens.append(Token(shell_quote(argv[i]), "value", argv[i], i, a if a in takes else last))
+        elif not sub_done:
+            tokens.append(Token(shell_quote(a), "subcommand", a, i))
+            sub_done = True
+        else:
+            tokens.append(Token(shell_quote(a), "path" if _looks_like_path(a) else "arg", a, i))
+        i += 1
+    _assign_roles(cmd, tokens)
+    return tokens
+
+
+def _assign_roles(cmd: str, tokens: list[Token]) -> None:
+    positional = [t for t in tokens if t.kind in ("path", "arg")]
+    options = {t.option for t in tokens if t.kind == "option"}
+    sub = next((t.arg for t in tokens if t.kind == "subcommand"), "")
+    if cmd in ("cp", "mv", "install", "ln") and positional:
+        if options & {"-t", "--target-directory", "-d", "--directory"}:
+            return
+        if len(positional) == 1 and cmd == "ln":
+            positional[0].role = "link target (what the link points to)"
+            return
+        *sources, dest = positional
+        for t in sources:
+            t.role = "link target (what the link points to)" if cmd == "ln" else "source"
+        if sources:
+            dest.role = "name of the link to create" if cmd == "ln" else "destination"
+    elif cmd in ("rm", "rmdir"):
+        for t in positional:
+            t.role = "will be deleted"
+    elif cmd in ("bash", "sh") and positional and "-c" not in options:
+        positional[0].role = "script that will run as root"
+    elif cmd == "systemctl" and sub in _UNIT_SUBS:
+        for t in positional:
+            t.role = "systemd unit"
+    elif cmd in SUBCOMMANDS and sub in _PKG_SUBS and SUBCOMMANDS[cmd] is _PKG:
+        for t in positional:
+            t.role = "package"
+    elif cmd == "chmod" and positional:
+        positional[0].role = "mode"
+    elif cmd in ("chown", "chgrp") and positional:
+        positional[0].role = "owner"
+
+
+def layout(tokens: list[Token]) -> list[list[Token]]:
+    """Lines for the dialog: short commands on one line; otherwise command (+ subcommand) first, then each option
+    with its value, each argument on its own line."""
+    if not tokens:
+        return []
+    if sum(len(t.shown) + (0 if t.joined else 1) for t in tokens) <= ONE_LINE_MAX:
+        return [tokens]
+    lines: list[list[Token]] = [[]]
+    for t in tokens:
+        if t.kind == "subcommand" and len(lines) == 1:
+            lines[0].append(t)
+        elif t.joined or (t.kind == "value" and lines[-1] and lines[-1][-1].kind == "option"):
+            lines[-1].append(t)
+        elif t.kind == "command":
+            lines[0].append(t)
+        else:
+            lines.append([t])
+    return [line for line in lines if line]
+
+
+# ── explanations ────────────────────────────────────────────────────────────────────────────────────────────
+
+_MAN_CACHE: dict[str, tuple[str, dict[str, tuple[bool, str]]]] = {}
+
+
+def _clean_man(text: str) -> str:
+    text = re.sub(r".\x08", "", text)
+    return re.sub(r"\x1b\[[0-9;]*[A-Za-z]", "", text)
+
+
+def parse_man(text: str) -> tuple[str, dict[str, tuple[bool, str]]]:
+    """From a rendered man page: (one-line summary, {option: (takes_value, description)})."""
+    text = _clean_man(text)
+    lines = text.splitlines()
+    summary = ""
+    for k, line in enumerate(lines):
+        if line.strip() in ("NAME", "NAZWA") and k + 1 < len(lines):
+            name_line = " ".join(x.strip() for x in lines[k + 1:k + 3] if x.strip())
+            summary = re.split(r"\s+[-–—]\s+", name_line, maxsplit=1)[-1]
+            summary = re.split(r"\s{2,}|\b[A-Z]{4,}\b", summary)[0].strip()
+            break
+    options: dict[str, tuple[bool, str]] = {}
+    header = re.compile(r"^( {2,12})(--?[A-Za-z0-9?].*)$")
+    i = 0
+    while i < len(lines):
+        m = header.match(lines[i])
+        if not m:
+            i += 1
+            continue
+        indent = len(m.group(1))
+        parts = re.split(r"\s{2,}", m.group(2), maxsplit=1)  # description may follow on the same line
+        spec, rest = parts[0], parts[1] if len(parts) > 1 else ""
+        desc = [rest.strip()] if rest.strip() else []
+        j = i + 1
+        while j < len(lines) and lines[j].strip() and len(lines[j]) - len(lines[j].lstrip()) > indent:
+            desc.append(lines[j].strip())
+            j += 1
+        names, takes = [], False
+        for part in re.split(r",\s*", spec):
+            nm = re.match(r"(--?[A-Za-z0-9?][\w-]*)(.*)$", part.strip())
+            if not nm:
+                continue
+            names.append(nm.group(1))
+            tail = nm.group(2)
+            if not tail.startswith("[") and re.match(r"(=|\s+\S)", tail):
+                takes = True
+        description = " ".join(desc)
+        description = re.sub(r"\s+", " ", re.sub(r"‐\s+", "", description)).strip()
+        if len(description) > 240:
+            description = description[:239].rsplit(" ", 1)[0] + "…"
+        for n in names:
+            options.setdefault(n, (takes, description))
+        i = j
+    return summary, options
+
+
+def man_info(cmd: str) -> tuple[str, dict[str, tuple[bool, str]]]:
+    """Summary and options from `man` (never runs the command itself). Cached; empty when unavailable."""
+    if cmd in _MAN_CACHE:
+        return _MAN_CACHE[cmd]
+    result: tuple[str, dict[str, tuple[bool, str]]] = ("", {})
+    if re.fullmatch(r"[\w.+-]+", cmd) and shutil.which("man"):
+        try:
+            out = subprocess.run(["man", "-P", "cat", "--", cmd], check=False, capture_output=True, text=True, timeout=4,
+                                 env={**os.environ, "MANWIDTH": "400", "MAN_KEEP_FORMATTING": "", "MANPAGER": "cat"},
+                                 stdin=subprocess.DEVNULL)
+            if out.returncode == 0:
+                result = parse_man(out.stdout)
+        except (OSError, subprocess.SubprocessError):
+            pass
+    _MAN_CACHE[cmd] = result
+    return result
+
+
+def describe_mode(value: str) -> str | None:
+    if not re.fullmatch(r"[0-7]{3,4}", value):
+        return None
+    mode = int(value, 8)
+    rwx = stat.filemode(mode | stat.S_IFREG)[1:]
+
+    def who(bits: int) -> str:
+        parts = [n for b, n in ((4, _("read")), (2, _("write")), (1, _("execute"))) if bits & b]
+        return ", ".join(parts) or _("nothing")
+
+    text = _("permissions {r}: owner {o}; group {g}; others {x}", r=rwx, o=who(mode >> 6 & 7), g=who(mode >> 3 & 7),
+             x=who(mode & 7))
+    if mode & 0o6000:
+        text += "\n" + _("⚠ setuid/setgid bit — runs with the owner's rights")
+    return text
+
+
+def describe_owner(value: str) -> str:
+    user, _sep, group = value.partition(":")
+    out = []
+    try:
+        if user:
+            pw = pwd.getpwnam(user) if not user.isdigit() else pwd.getpwuid(int(user))
+            out.append(_("user {u} (UID {i})", u=pw.pw_name, i=pw.pw_uid))
+        if group:
+            gr = grp.getgrnam(group) if not group.isdigit() else grp.getgrgid(int(group))
+            out.append(_("group {g} (GID {i})", g=gr.gr_name, i=gr.gr_gid))
+    except (KeyError, ValueError):
+        return _("unknown user or group")
+    return ", ".join(out)
+
+
+def _human(size: int) -> str:
+    for unit in ("B", "kB", "MB", "GB"):
+        if size < 1024 or unit == "GB":
+            return f"{size:.0f} {unit}" if unit == "B" else f"{size:.1f} {unit}"
+        size /= 1024
+    return str(size)
+
+
+def path_facts(path: str, cwd: str | None = None) -> list[str]:
+    p = os.path.expanduser(path)
+    if cwd and not os.path.isabs(p):
+        p = os.path.join(cwd, p)
+    facts = []
+    try:
+        st = os.lstat(p)
+    except FileNotFoundError:
+        parent = os.path.dirname(os.path.abspath(p)) or "/"
+        facts.append(_("does not exist yet (will be created)") if os.path.isdir(parent)
+                     else _("does not exist, and neither does its parent directory"))
+        st = None
+    except OSError:
+        return [_("cannot be checked (no permission)")]
+    if st is not None:
+        if stat.S_ISLNK(st.st_mode):
+            kind = _("symlink → {t}", t=os.readlink(p))
+        elif stat.S_ISDIR(st.st_mode):
+            kind = _("directory")
+        elif stat.S_ISREG(st.st_mode):
+            kind = f"{_('file')}, {_human(st.st_size)}"
+        else:
+            kind = _("special file")
+        try:
+            owner = pwd.getpwuid(st.st_uid).pw_name
+        except KeyError:
+            owner = str(st.st_uid)
+        try:
+            group = grp.getgrgid(st.st_gid).gr_name
+        except KeyError:
+            group = str(st.st_gid)
+        facts.append(f"{kind}; " + _("owner {o}:{g}, {m}", o=owner, g=group, m=stat.filemode(st.st_mode)))
+    absolute = os.path.abspath(p)
+    home = os.path.expanduser("~")
+    if absolute.startswith(home.rstrip("/") + "/"):
+        facts.append(_("in your home directory"))
+    else:
+        for prefix, label in LOCATIONS:
+            if absolute.startswith(prefix):
+                facts.append(_(label))
+                break
+    return facts
+
+
+def _resolve_command(cmd: str) -> str | None:
+    if "/" in cmd:
+        return os.path.abspath(cmd)
+    return shutil.which(cmd, path=SECURE_PATH)
+
+
+def _unsafe_for_root(path: str) -> bool:
+    try:
+        st = os.stat(path)
+    except OSError:
+        return False
+    return st.st_uid != 0 or bool(st.st_mode & (stat.S_IWGRP | stat.S_IWOTH))
+
+
+def _unit_description(unit: str) -> str:
+    if not shutil.which("systemctl") or not re.fullmatch(r"[\w@.:-]+", unit):
+        return ""
+    try:
+        out = subprocess.run(["systemctl", "show", "-p", "Description", "--value", "--", unit], check=False, capture_output=True,
+                             text=True, timeout=2, stdin=subprocess.DEVNULL)
+        return out.stdout.strip() if out.returncode == 0 else ""
+    except (OSError, subprocess.SubprocessError):
+        return ""
+
+
+def _agent_matches(token: Token, fragment: str) -> bool:
+    if fragment in (token.arg, token.shown, token.option):
+        return True
+    if token.kind in ("path", "value", "arg", "command") and "/" in token.arg:
+        return token.arg.endswith("/" + fragment.lstrip("/")) or os.path.basename(token.arg) == fragment
+    return False
+
+
+def explain(tokens: list[Token], agent: dict[str, str] | None = None, cwd: str | None = None,
+            use_system: bool = True) -> list[str]:
+    """Fill token.notes. Returns the requester's notes that matched no token (shown separately)."""
+    agent = agent or {}
+    used: set[str] = set()
+    if not tokens:
+        return list(agent.values())
+    cmd = os.path.basename(tokens[0].arg)
+    summary, man_opts = man_info(cmd) if use_system else ("", {})
+    for t in tokens:
+        for fragment, text in agent.items():
+            if _agent_matches(t, fragment):
+                t.notes.append(("agent", text))
+                used.add(fragment)
+        builtin: list[str] = []
+        system: list[str] = []
+        if t.kind == "command":
+            builtin.append(f"{_('command')}: {L(*COMMANDS[cmd])}" if cmd in COMMANDS else _("command"))
+            if summary:
+                system.append(f"man {cmd}: {summary}")
+            if use_system:
+                resolved = _resolve_command(t.arg)
+                if resolved:
+                    system.append(_("root will run {p}", p=resolved))
+                    system += path_facts(resolved, cwd)
+                    if _unsafe_for_root(resolved):
+                        system.append(_("⚠ not owned by root or writable by others — could be changed before it runs"))
+                else:
+                    system.append(_("not found in sudo's PATH"))
+        elif t.kind == "subcommand":
+            text = SUBCOMMANDS.get(cmd, {}).get(t.arg)
+            builtin.append(f"{_('subcommand')}: {L(*text)}" if text else _("subcommand"))
+        elif t.kind == "option":
+            text = OPTIONS.get(cmd, {}).get(t.option)
+            if not text and len(t.option) > 2 and not t.option.startswith("--"):
+                letters = [OPTIONS.get(cmd, {}).get("-" + ch) for ch in t.option[1:]]
+                if all(letters):
+                    text = tuple("; ".join(x[k] for x in letters) for k in (0, 1))
+            builtin.append(f"{_('option')}: {L(*text)}" if text else _("option"))
+            man_text = man_opts.get(t.option, (False, ""))[1]
+            if not man_text and len(t.option) > 2 and not t.option.startswith("--"):
+                man_text = "; ".join(man_opts[f"-{ch}"][1] for ch in t.option[1:] if f"-{ch}" in man_opts)
+            if man_text:
+                system.append(f"man {cmd}: {man_text}")
+        elif t.kind == "value":
+            builtin.append(_("value of {o}", o=t.option))
+            opt = t.option
+            if opt in ("-m", "--mode") and cmd in ("install", "mkdir"):
+                mode = describe_mode(t.arg)
+                if mode:
+                    system.append(mode)
+            elif opt in ("-o", "--owner", "-g", "--group") and cmd == "install" and use_system:
+                system.append(describe_owner(":" + t.arg if opt in ("-g", "--group") else t.arg))
+            elif opt in ("-t", "--target-directory") or _looks_like_path(t.arg):
+                if use_system:
+                    system += path_facts(t.arg, cwd)
+        elif t.kind == "marker":
+            builtin.append(_("end of options — everything after is an argument"))
+        else:  # path / arg
+            label = _("path") if t.kind == "path" else _("argument")
+            if t.role == "mode":
+                builtin.append(L("permissions", "prawa dostępu"))
+                mode = describe_mode(t.arg)
+                if mode:
+                    system.append(mode)
+            elif t.role == "owner":
+                builtin.append(L("new owner", "nowy właściciel"))
+                if use_system:
+                    system.append(describe_owner(t.arg))
+            else:
+                builtin.append(f"{label}: {_(t.role)}" if t.role else label)
+            if t.role == "systemd unit" and use_system:
+                desc = _unit_description(t.arg)
+                if desc:
+                    system.append(_("unit: {d}", d=desc))
+            if t.kind == "path" and use_system:
+                facts = path_facts(t.arg, cwd)
+                system += facts
+                p = os.path.join(cwd or os.getcwd(), os.path.expanduser(t.arg))
+                if t.role == "destination" and os.path.isfile(p) and not os.path.islink(p):
+                    system.append(_("⚠ an existing file — it will be replaced"))
+                elif t.role == "destination" and os.path.isdir(p):
+                    system.append(_("files will be placed in this directory"))
+                if t.role == "script that will run as root" and os.path.isfile(p) and _unsafe_for_root(p):
+                    system.append(_("⚠ not owned by root or writable by others — could be changed before it runs"))
+        t.notes += [("builtin", x) for x in builtin] + [("system", x) for x in system]
+    return [text for fragment, text in agent.items() if fragment not in used]
+
+
+def _esc(s: str) -> str:
+    """Escape for Pango markup (GTK, zenity) and Qt rich text (kdialog)."""
+    return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+
+def line_text(line: list[Token]) -> str:
+    out = ""
+    for t in line:
+        out += t.shown if (t.joined or not out) else " " + t.shown
+    return out
+
+
+def tooltip_markup(token: Token) -> str:
+    escape = _esc
+    sections = []
+    agent = [x for s, x in token.notes if s == "agent"]
+    builtin = [x for s, x in token.notes if s == "builtin"]
+    system = [x for s, x in token.notes if s == "system"]
+    if agent:
+        sections.append(f"<b>{escape(_('Requester says'))}</b> <i>({escape(_('claim, not verified'))})</i>\n"
+                        + "\n".join(escape(x) for x in agent))
+    if builtin:
+        sections.append("\n".join(escape(x) for x in builtin))
+    if system:
+        sections.append(f"<b>{escape(_('Checked now'))}</b>\n" + "\n".join(escape(x) for x in system))
+    return "\n\n".join(sections) or escape(token.arg)
+
+
+# ── dialogs ─────────────────────────────────────────────────────────────────────────────────────────────────
+
+@dataclass
+class Request:
+    reason: str
+    argv: list[str]
+    explanations: dict[str, str]
+    attempt: int = 1
+    cwd: str = ""
+    caller: str = ""
+    preview: bool = False
+    screenshot: str = ""
+
+
+CSS = """
+.rw-reason {{ font-size: 1.1em; }}
+.rw-error {{ color: {error}; font-weight: bold; }}
+.rw-dim {{ opacity: 0.7; font-size: 0.9em; }}
+.rw-box {{ font-family: monospace; padding: 10px 12px; border-radius: 6px; background-color: {bg}; }}
+.rw-tok {{ padding: 0 2px; border-radius: 3px; }}
+.rw-tok:hover {{ background-color: {hover}; }}
+.rw-k-command {{ color: {cmd}; font-weight: bold; }}
+.rw-k-subcommand {{ color: {cmd}; }}
+.rw-k-option {{ color: {opt}; }}
+.rw-k-value {{ color: {val}; }}
+.rw-k-path {{ color: {path}; }}
+.rw-k-marker, .rw-cont {{ opacity: 0.55; }}
+"""
+PALETTES = {
+    "light": {"cmd": "#1a5fb4", "opt": "#813d9c", "val": "#b04a00", "path": "#1c7a43", "error": "#c01c28",
+              "bg": "rgba(0,0,0,0.05)", "hover": "rgba(0,0,0,0.10)"},
+    "dark": {"cmd": "#78aeed", "opt": "#dc8add", "val": "#ffa348", "path": "#8ff0a4", "error": "#ff7b63",
+             "bg": "rgba(255,255,255,0.06)", "hover": "rgba(255,255,255,0.14)"},
+}
+
+
+def gtk_dialog(req: Request) -> str | None:
+    """GTK 4 dialog. Returns the password, None when cancelled. Raises ImportError/RuntimeError without GTK 4."""
+    import gi
+    gi.require_version("Gtk", "4.0")
+    gi.require_version("Gdk", "4.0")
+    gi.require_version("Pango", "1.0")
+    from gi.repository import Gdk, GLib, Gtk, Pango
+
+    if not Gtk.init_check():
+        raise RuntimeError("GTK cannot open a display")
+    tokens = tokenize(req.argv, {os.path.basename(req.argv[0]): {k for k, v in man_info(
+        os.path.basename(req.argv[0]))[1].items() if v[0]}} if req.argv else None)
+    leftover = explain(tokens, req.explanations, req.cwd or None)
+    result: dict[str, str | None] = {"password": None}
+    loop = GLib.MainLoop()
+
+    win = Gtk.Window(title=f"rootwhy — {_('Administrator access')}")
+    win.set_default_size(860, -1)
+    win.set_resizable(True)
+
+    outer = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
+    for side in ("top", "bottom", "start", "end"):
+        getattr(outer, f"set_margin_{side}")(18)
+    win.set_child(outer)
+
+    head = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=14)
+    logo = Path(__file__).resolve().parent / "logo.svg"
+    icon = Gtk.Image.new_from_file(str(logo)) if logo.is_file() else Gtk.Image.new_from_icon_name("dialog-password")
+    icon.set_pixel_size(48)
+    icon.set_valign(Gtk.Align.START)
+    head.append(icon)
+    texts = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+    texts.set_hexpand(True)
+    head.append(texts)
+    outer.append(head)
+
+    def label(text: str, css: str = "", markup: bool = False, wrap: bool = True) -> Gtk.Label:
+        lbl = Gtk.Label()
+        lbl.set_markup(text) if markup else lbl.set_text(text)
+        lbl.set_xalign(0)
+        lbl.set_wrap(wrap)
+        lbl.set_wrap_mode(Pango.WrapMode.WORD_CHAR)
+        if css:
+            for c in css.split():
+                lbl.add_css_class(c)
+        return lbl
+
+    if req.attempt > 1:
+        texts.append(label(_("Wrong password — try again (attempt {n}).", n=req.attempt), "rw-error"))
+    if req.preview:
+        texts.append(label(_("Preview — nothing will run."), "rw-dim"))
+    texts.append(label(req.reason, "rw-reason"))
+
+    outer.append(label(_("Command (hover over a part for an explanation):"), "rw-dim"))
+    box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
+    box.add_css_class("rw-box")
+    lines = layout(tokens)
+    for n, line in enumerate(lines):
+        row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=0)
+        if n:
+            row.set_margin_start(28)
+        for t in line:
+            if not t.joined and row.get_first_child() is not None:
+                row.append(Gtk.Label(label=" "))
+            tok = Gtk.Label(label=t.shown)
+            tok.set_xalign(0)
+            if len(t.shown) > 110:  # only very long parts wrap; the window grows for the rest
+                tok.set_wrap(True)
+                tok.set_wrap_mode(Pango.WrapMode.WORD_CHAR)
+                tok.set_width_chars(110)
+                tok.set_max_width_chars(110)
+            tok.set_selectable(False)
+            tok.add_css_class("rw-tok")
+            tok.add_css_class(f"rw-k-{t.kind}")
+            tok.set_tooltip_markup(tooltip_markup(t))
+            row.append(tok)
+        if n < len(lines) - 1:
+            cont = Gtk.Label(label=" \\")
+            cont.add_css_class("rw-cont")
+            row.append(cont)
+        box.append(row)
+    scroll = Gtk.ScrolledWindow()
+    scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+    scroll.set_propagate_natural_height(True)
+    scroll.set_max_content_height(420)
+    scroll.set_child(box)
+    outer.append(scroll)
+
+    if leftover:
+        outer.append(label(_("Other notes from the requester:") + "\n" + "\n".join(f"• {x}" for x in leftover),
+                           "rw-dim"))
+    meta = [_("Working directory: {d}", d=req.cwd)] if req.cwd else []
+    if req.caller:
+        meta.append(_("Requested by: {c}", c=req.caller))
+    if meta:
+        outer.append(label("\n".join(meta), "rw-dim"))
+
+    entry = Gtk.PasswordEntry()
+    entry.set_show_peek_icon(True)
+    entry.set_hexpand(True)
+    pw_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
+    pw_row.append(label(_("Password:"), wrap=False))
+    pw_row.append(entry)
+    outer.append(pw_row)
+
+    buttons = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+    buttons.set_halign(Gtk.Align.END)
+    cancel = Gtk.Button(label=_("Cancel"))
+    ok = Gtk.Button(label=_("Authorize"))
+    ok.add_css_class("suggested-action")
+    buttons.append(cancel)
+    buttons.append(ok)
+    outer.append(buttons)
+
+    def finish(password: str | None) -> None:
+        result["password"] = password
+        win.destroy()
+        loop.quit()
+
+    ok.connect("clicked", lambda *_a: finish(entry.get_text()))
+    entry.connect("activate", lambda *_a: finish(entry.get_text()))
+    cancel.connect("clicked", lambda *_a: finish(None))
+    win.connect("close-request", lambda *_a: (finish(None), False)[1])
+    keys = Gtk.EventControllerKey()
+    keys.connect("key-pressed", lambda _c, keyval, *_a: (finish(None), True)[1] if keyval == Gdk.KEY_Escape else False)
+    win.add_controller(keys)
+
+    # palette from the theme's text colour: light text → dark theme
+    probe = Gtk.Label()
+    outer.append(probe)
+    win.present()
+    color = probe.get_color()
+    outer.remove(probe)
+    dark = (0.2126 * color.red + 0.7152 * color.green + 0.0722 * color.blue) > 0.5
+    css = CSS.format(**PALETTES["dark" if dark else "light"])
+    provider = Gtk.CssProvider()
+    if hasattr(provider, "load_from_string"):  # GTK ≥ 4.12
+        provider.load_from_string(css)
+    else:
+        provider.load_from_data(css.encode(), -1)
+    add_provider = getattr(Gtk, "style_context_add_provider_for_display", None) or \
+        Gtk.StyleContext.add_provider_for_display
+    add_provider(win.get_display(), provider, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
+    entry.grab_focus()
+
+    if req.screenshot:
+        def shoot() -> bool:
+            w, h = win.get_width(), win.get_height()
+            paintable = Gtk.WidgetPaintable.new(win)
+            snap = Gtk.Snapshot()
+            paintable.snapshot(snap, w, h)
+            node = snap.to_node()
+            if node is not None:
+                win.get_renderer().render_texture(node, None).save_to_png(req.screenshot)
+            finish(None)
+            return False
+        GLib.timeout_add(700, shoot)
+
+    loop.run()
+    return result["password"]
+
+
+def fallback_dialog(req: Request) -> str | None:
+    """kdialog / zenity: no colours or hover, but the same reason and the command split into lines."""
+    lines = [line_text(line) for line in layout(tokenize(req.argv))]
+    lines = [("    " if n else "") + line + (" \\" if n < len(lines) - 1 else "") for n, line in enumerate(lines)]
+    retry = _("Wrong password — try again (attempt {n}).", n=req.attempt) if req.attempt > 1 else ""
+    title = f"rootwhy — {_('Administrator access')}"
+    if shutil.which("kdialog"):
+        body = "<br>".join(_esc(x).replace("  ", "&nbsp;&nbsp;") for x in lines)
+        text = (f"<p><b>{_esc(retry)}</b></p>" if retry else "") + f"<p>{_esc(req.reason)}</p><p><code>{body}</code></p>"
+        cmd = ["kdialog", "--title", title, "--password", text]
+    elif shutil.which("zenity"):
+        text = (f"<b>{_esc(retry)}</b>\n\n" if retry else "") + f"{_esc(req.reason)}\n\n<tt>" + \
+            "\n".join(_esc(x) for x in lines) + "</tt>"
+        cmd = ["zenity", "--entry", "--hide-text", "--title", title, "--width", "760", "--text", text]
+    else:
+        raise RuntimeError(_("rootwhy: no dialog available (GTK 4, kdialog or zenity)"))
+    out = subprocess.run(cmd, check=False, capture_output=True, text=True, stdin=subprocess.DEVNULL)
+    return out.stdout.rstrip("\n") if out.returncode == 0 else None
+
+
+def show_dialog(req: Request) -> str | None:
+    if os.environ.get("ROOTWHY_DIALOG") != "fallback":
+        try:
+            return gtk_dialog(req)
+        except (ImportError, ValueError, RuntimeError, AttributeError):
+            if req.screenshot:
+                raise
+    return fallback_dialog(req)
+
+
+# ── modes ───────────────────────────────────────────────────────────────────────────────────────────────────
+
+def _parent_comm(pid: int) -> str:
+    try:
+        return Path(f"/proc/{pid}/comm").read_text().strip()
+    except OSError:
+        return ""
+
+
+def _caller_chain(pid: int, depth: int = 3) -> str:
+    names = []
+    for _i in range(depth):
+        try:
+            stat_line = Path(f"/proc/{pid}/stat").read_text()
+        except OSError:
+            break
+        names.append(stat_line[stat_line.index("(") + 1:stat_line.rindex(")")])
+        pid = int(stat_line[stat_line.rindex(")") + 2:].split()[1])
+        if pid <= 1:
+            break
+    return " ← ".join(names)
+
+
+def askpass_mode() -> int:
+    """Run by sudo -A: show the dialog, print the password. Only when the parent process is sudo — an inherited
+    environment must not turn this into a password prompt for whoever started it."""
+    if _parent_comm(os.getppid()) != "sudo":
+        print(_("rootwhy: askpass mode is only for sudo -A"), file=sys.stderr)
+        return 1
+    state = os.environ.get("ROOTWHY_STATE", "")
+    previous = ""
+    if state:
+        try:
+            previous = Path(state).read_text().strip()
+        except OSError:
+            pass
+    if previous == "cancelled":  # sudo asks again after a cancel — no second dialog
+        return 1
+    attempt = int(previous) + 1 if previous.isdigit() else 1
+    if state:
+        Path(state).write_text(str(attempt))
+    try:
+        argv = json.loads(os.environ.get("ROOTWHY_ARGV", "[]"))
+        explanations = json.loads(os.environ.get("ROOTWHY_EXPLAIN", "{}"))
+    except json.JSONDecodeError:
+        argv, explanations = [], {}
+    if not argv:
+        argv = [os.environ.get("ROOTWHY_COMMAND", "?")]
+    req = Request(reason=os.environ.get("ROOTWHY_REASON", ""), argv=[str(a) for a in argv],
+                  explanations={str(k): str(v) for k, v in dict(explanations).items()}, attempt=attempt,
+                  cwd=os.environ.get("ROOTWHY_CWD", ""), caller=os.environ.get("ROOTWHY_CALLER", ""))
+    password = show_dialog(req)
+    if password is None:
+        if state:
+            Path(state).write_text("cancelled")
+        return 1
+    sys.stdout.write(password + "\n")
+    sys.stdout.flush()
+    return 0
+
+
+def _clean(text: str) -> str:
+    return re.sub(r"[\x00-\x1f\x7f]", " ", text).strip()
+
+
+def _log(log_dir: Path, reason: str, command: str, status: str) -> None:
+    try:
+        log_dir.mkdir(parents=True, exist_ok=True)
+        now = _dt.datetime.now()
+        with open(log_dir / f"{now:%Y%m}.log", "a", encoding="utf-8") as f:
+            f.write(f"{now:%Y-%m-%d %H:%M:%S} | {reason} | {command} | {status}\n")
+    except OSError as e:
+        print(f"rootwhy: log: {e}", file=sys.stderr)
+
+
+def parse_args(args: list[str]) -> argparse.Namespace:
+    p = argparse.ArgumentParser(
+        prog="rootwhy",
+        description=L("Run a command as root after a password dialog that shows why and explains each part.",
+                      "Uruchamia polecenie jako root po haśle w okienku, które mówi po co i wyjaśnia każdy fragment."),
+        epilog=L('Example: rootwhy -r "Restart Ollama after changing its service file." '
+                 '-e ollama="the local AI model server" systemctl restart ollama',
+                 'Przykład: rootwhy -r "Restart Ollamy po zmianie pliku usługi." '
+                 '-e ollama="serwer lokalnych modeli AI" systemctl restart ollama'))
+    p.add_argument("-r", "--reason", default="",
+                   help=L(f"why the command is needed, {REASON_MIN}–{REASON_MAX} characters (required)",
+                          f"po co jest polecenie, {REASON_MIN}–{REASON_MAX} znaków (wymagane)"))
+    p.add_argument("-e", "--explain", action="append", default=[], metavar="FRAGMENT=TEXT",
+                   help=L("explanation shown on hover over the matching part (repeatable)",
+                          "wyjaśnienie po najechaniu na pasujący fragment (można powtarzać)"))
+    p.add_argument("--log-dir", default=os.environ.get("ROOTWHY_LOG_DIR", ""),
+                   help=L("log directory (default: $XDG_STATE_HOME/rootwhy)",
+                          "katalog dziennika (domyślnie $XDG_STATE_HOME/rootwhy)"))
+    p.add_argument("--preview", action="store_true",
+                   help=L("only show the dialog; run nothing", "tylko pokaż okienko; niczego nie uruchamiaj"))
+    p.add_argument("--screenshot", default="", metavar="PNG", help=argparse.SUPPRESS)
+    p.add_argument("--version", action="version", version=f"rootwhy {VERSION}")
+    p.add_argument("command", nargs=argparse.REMAINDER)
+    ns = p.parse_args(args)
+    if ns.command and ns.command[0] == "--":
+        ns.command = ns.command[1:]
+    return ns
+
+
+def main_mode(args: list[str]) -> int:
+    ns = parse_args(args)
+    reason = _clean(ns.reason)
+    if not REASON_MIN <= len(reason) <= REASON_MAX:
+        print(_("rootwhy: reason (-r) is required, {a}–{b} characters", a=REASON_MIN, b=REASON_MAX), file=sys.stderr)
+        return 2
+    if not ns.command:
+        print(_("rootwhy: no command given"), file=sys.stderr)
+        return 2
+    explanations: dict[str, str] = {}
+    for item in ns.explain:
+        fragment, eq, text = item.partition("=")
+        if not eq or not fragment or not text.strip():
+            print(_("rootwhy: bad --explain, expected FRAGMENT=TEXT: {e}", e=item), file=sys.stderr)
+            return 2
+        explanations[fragment] = _clean(text)[:EXPLAIN_MAX]
+    if not (os.environ.get("WAYLAND_DISPLAY") or os.environ.get("DISPLAY")):
+        print(_("rootwhy: no graphical session for the dialog"), file=sys.stderr)
+        return 2
+    caller = _caller_chain(os.getppid())
+    if ns.preview or ns.screenshot:
+        req = Request(reason, ns.command, explanations, cwd=os.getcwd(), caller=caller, preview=True,
+                      screenshot=ns.screenshot)
+        return 0 if show_dialog(req) is not None else 130
+
+    command = " ".join(shell_quote(a) for a in ns.command)
+    log_dir = Path(ns.log_dir) if ns.log_dir else \
+        Path(os.environ.get("XDG_STATE_HOME") or Path.home() / ".local/state") / "rootwhy"
+    _log(log_dir, reason, command, "start")
+    fd, state = tempfile.mkstemp(prefix="rootwhy.", dir=os.environ.get("XDG_RUNTIME_DIR") or None)
+    os.close(fd)
+    env = {k: v for k, v in os.environ.items() if not k.startswith(("ROOTWHY_", "SUDO_"))}
+    env.update(ROOTWHY_MODE="askpass", ROOTWHY_STATE=state, ROOTWHY_REASON=reason,
+               ROOTWHY_ARGV=json.dumps(ns.command), ROOTWHY_EXPLAIN=json.dumps(explanations),
+               ROOTWHY_CWD=os.getcwd(), ROOTWHY_CALLER=caller, SUDO_ASKPASS=os.path.realpath(__file__))
+    try:
+        sudo = "/usr/bin/sudo" if os.path.exists("/usr/bin/sudo") else "sudo"
+        code = subprocess.run([sudo, "-k", "-A", "--", *ns.command], check=False, env=env).returncode
+        cancelled = Path(state).read_text().strip() == "cancelled"
+    except KeyboardInterrupt:
+        code, cancelled = 130, False
+    finally:
+        Path(state).unlink(missing_ok=True)
+    if cancelled:
+        code = 130
+        print(_("rootwhy: cancelled by the user"), file=sys.stderr)
+    _log(log_dir, reason, command, f"exit {code}")
+    return code
+
+
+def main() -> int:
+    if os.environ.get("ROOTWHY_MODE") == "askpass":
+        return askpass_mode()
+    return main_mode(sys.argv[1:])
+
+
+if __name__ == "__main__":
+    sys.exit(main())
