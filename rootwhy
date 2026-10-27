@@ -27,7 +27,7 @@ import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 
-VERSION = "0.1.0"
+VERSION = "1.0.0"
 SECURE_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"  # sudo's default secure_path
 REASON_MIN, REASON_MAX = 10, 300
 EXPLAIN_MAX = 300
@@ -821,6 +821,34 @@ def tooltip_markup(token: Token) -> str:
     return "\n\n".join(sections) or escape(token.arg)
 
 
+LOGO_SVG = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256">
+  <title>rootwhy</title>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#1a5fb4"/>
+      <stop offset="1" stop-color="#613583"/>
+    </linearGradient>
+    <linearGradient id="mark" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#1a5fb4"/>
+      <stop offset="1" stop-color="#613583"/>
+    </linearGradient>
+  </defs>
+  <rect x="8" y="8" width="240" height="240" rx="56" fill="url(#bg)"/>
+  <!-- shackle -->
+  <path d="M86 118 V90 a42 42 0 0 1 84 0 V118" fill="none" stroke="#ffffff" stroke-width="20" stroke-linecap="round"/>
+  <!-- lock body -->
+  <rect x="58" y="108" width="140" height="108" rx="24" fill="#ffffff"/>
+  <!-- question mark instead of a keyhole -->
+  <path d="M111 146 a17 17 0 1 1 26 14.5 c-6.5 4 -9 7.5 -9 14.5 v3" fill="none" stroke="url(#mark)" stroke-width="13"
+        stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="128" cy="197" r="7.5" fill="url(#mark)"/>
+  <!-- root prompt -->
+  <text x="184" y="62" font-family="DejaVu Sans Mono, Menlo, Consolas, monospace" font-size="34" font-weight="bold"
+        fill="#ffffff" fill-opacity="0.85" text-anchor="middle">#</text>
+</svg>
+"""  # same as logo.svg — the release is this one file
+
+
 # ── dialogs ─────────────────────────────────────────────────────────────────────────────────────────────────
 
 @dataclass
@@ -857,21 +885,76 @@ PALETTES = {
 }
 
 
-def gtk_dialog(req: Request) -> str | None:
-    """GTK 4 dialog. Returns the password, None when cancelled. Raises ImportError/RuntimeError without GTK 4."""
+def _load_gtk():
+    """Gtk 4, else Gtk 3 (ROOTWHY_GTK=3 forces 3). Returns (Gtk, Gdk, GLib, Pango, major)."""
     import gi
-    gi.require_version("Gtk", "4.0")
-    gi.require_version("Gdk", "4.0")
-    gi.require_version("Pango", "1.0")
-    from gi.repository import Gdk, GLib, Gtk, Pango
+    for major in (("3.0",) if os.environ.get("ROOTWHY_GTK") == "3" else ("4.0", "3.0")):
+        try:
+            gi.require_version("Gtk", major)
+            gi.require_version("Gdk", major)
+            gi.require_version("Pango", "1.0")
+            from gi.repository import Gdk, GLib, Gtk, Pango
+            return Gtk, Gdk, GLib, Pango, int(major[0])
+        except ValueError:
+            continue
+    raise ImportError("no GTK 4 or GTK 3 for Python")
 
-    if not Gtk.init_check():
+
+def gtk_dialog(req: Request) -> str | None:
+    """GTK 4 (or GTK 3) dialog. Returns the password, None when cancelled. Raises ImportError/RuntimeError without
+    GTK."""
+    Gtk, Gdk, GLib, Pango, major = _load_gtk()
+    v4 = major == 4
+    if not (Gtk.init_check() if v4 else Gtk.init_check(None)[0]):
         raise RuntimeError("GTK cannot open a display")
     tokens = tokenize(req.argv, {os.path.basename(req.argv[0]): {k for k, v in man_info(
         os.path.basename(req.argv[0]))[1].items() if v[0]}} if req.argv else None)
     leftover = explain(tokens, req.explanations, req.cwd or None)
     result: dict[str, str | None] = {"password": None}
     loop = GLib.MainLoop()
+
+    # the few calls that differ between GTK 3 and 4
+    def add(box, child, expand: bool = False) -> None:
+        box.append(child) if v4 else box.pack_start(child, expand, expand, 0)
+
+    def css_class(widget, name: str) -> None:
+        widget.add_css_class(name) if v4 else widget.get_style_context().add_class(name)
+
+    def wrap(lbl, on: bool = True) -> None:
+        if v4:
+            lbl.set_wrap(on)
+            lbl.set_wrap_mode(Pango.WrapMode.WORD_CHAR)
+        else:
+            lbl.set_line_wrap(on)
+            lbl.set_line_wrap_mode(Pango.WrapMode.WORD_CHAR)
+
+    def label(text: str, css: str = "", do_wrap: bool = True):
+        lbl = Gtk.Label(label=text)
+        lbl.set_xalign(0)
+        wrap(lbl, do_wrap)
+        for c in css.split():
+            css_class(lbl, c)
+        return lbl
+
+    def logo_image():
+        try:
+            if v4:
+                texture = Gdk.Texture.new_from_bytes(GLib.Bytes.new(LOGO_SVG.encode()))
+                image = Gtk.Image.new_from_paintable(texture)
+                image.set_pixel_size(48)
+                return image
+            gi_pixbuf = __import__("gi.repository.GdkPixbuf", fromlist=["GdkPixbuf"])
+            loader = gi_pixbuf.PixbufLoader()
+            loader.set_size(48, 48)
+            loader.write(LOGO_SVG.encode())
+            loader.close()
+            return Gtk.Image.new_from_pixbuf(loader.get_pixbuf())
+        except Exception:  # no SVG loader — the theme's icon will do
+            if v4:
+                image = Gtk.Image.new_from_icon_name("dialog-password")
+                image.set_pixel_size(48)
+                return image
+            return Gtk.Image.new_from_icon_name("dialog-password", Gtk.IconSize.DIALOG)
 
     win = Gtk.Window(title=f"rootwhy — {_('Administrator access')}")
     win.set_default_size(860, -1)
@@ -880,137 +963,152 @@ def gtk_dialog(req: Request) -> str | None:
     outer = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
     for side in ("top", "bottom", "start", "end"):
         getattr(outer, f"set_margin_{side}")(18)
-    win.set_child(outer)
+    win.set_child(outer) if v4 else win.add(outer)
 
     head = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=14)
-    logo = Path(__file__).resolve().parent / "logo.svg"
-    icon = Gtk.Image.new_from_file(str(logo)) if logo.is_file() else Gtk.Image.new_from_icon_name("dialog-password")
-    icon.set_pixel_size(48)
+    icon = logo_image()
     icon.set_valign(Gtk.Align.START)
-    head.append(icon)
+    add(head, icon)
     texts = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
     texts.set_hexpand(True)
-    head.append(texts)
-    outer.append(head)
-
-    def label(text: str, css: str = "", markup: bool = False, wrap: bool = True) -> Gtk.Label:
-        lbl = Gtk.Label()
-        lbl.set_markup(text) if markup else lbl.set_text(text)
-        lbl.set_xalign(0)
-        lbl.set_wrap(wrap)
-        lbl.set_wrap_mode(Pango.WrapMode.WORD_CHAR)
-        if css:
-            for c in css.split():
-                lbl.add_css_class(c)
-        return lbl
+    add(head, texts, expand=True)
+    add(outer, head)
 
     if req.attempt > 1:
-        texts.append(label(_("Wrong password — try again (attempt {n}).", n=req.attempt), "rw-error"))
+        add(texts, label(_("Wrong password — try again (attempt {n}).", n=req.attempt), "rw-error"))
     if req.preview:
-        texts.append(label(_("Preview — nothing will run."), "rw-dim"))
-    texts.append(label(req.reason, "rw-reason"))
+        add(texts, label(_("Preview — nothing will run."), "rw-dim"))
+    add(texts, label(req.reason, "rw-reason"))
 
-    outer.append(label(_("Command (hover over a part for an explanation):"), "rw-dim"))
+    add(outer, label(_("Command (hover over a part for an explanation):"), "rw-dim"))
     box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
-    box.add_css_class("rw-box")
+    css_class(box, "rw-box")
     lines = layout(tokens)
     for n, line in enumerate(lines):
         row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=0)
         if n:
             row.set_margin_start(28)
-        for t in line:
-            if not t.joined and row.get_first_child() is not None:
-                row.append(Gtk.Label(label=" "))
+        for k, t in enumerate(line):
+            if k and not t.joined:
+                add(row, Gtk.Label(label=" "))
             tok = Gtk.Label(label=t.shown)
             tok.set_xalign(0)
             if len(t.shown) > 110:  # only very long parts wrap; the window grows for the rest
-                tok.set_wrap(True)
-                tok.set_wrap_mode(Pango.WrapMode.WORD_CHAR)
+                wrap(tok)
                 tok.set_width_chars(110)
                 tok.set_max_width_chars(110)
             tok.set_selectable(False)
-            tok.add_css_class("rw-tok")
-            tok.add_css_class(f"rw-k-{t.kind}")
+            css_class(tok, "rw-tok")
+            css_class(tok, f"rw-k-{t.kind}")
             tok.set_tooltip_markup(tooltip_markup(t))
-            row.append(tok)
+            add(row, tok)
         if n < len(lines) - 1:
             cont = Gtk.Label(label=" \\")
-            cont.add_css_class("rw-cont")
-            row.append(cont)
-        box.append(row)
+            css_class(cont, "rw-cont")
+            add(row, cont)
+        add(box, row)
     scroll = Gtk.ScrolledWindow()
     scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
     scroll.set_propagate_natural_height(True)
     scroll.set_max_content_height(420)
-    scroll.set_child(box)
-    outer.append(scroll)
+    scroll.set_child(box) if v4 else scroll.add(box)
+    add(outer, scroll)
 
     if leftover:
-        outer.append(label(_("Other notes from the requester:") + "\n" + "\n".join(f"• {x}" for x in leftover),
-                           "rw-dim"))
+        add(outer, label(_("Other notes from the requester:") + "\n" + "\n".join(f"• {x}" for x in leftover), "rw-dim"))
     meta = [_("Working directory: {d}", d=req.cwd)] if req.cwd else []
     if req.caller:
         meta.append(_("Requested by: {c}", c=req.caller))
     if meta:
-        outer.append(label("\n".join(meta), "rw-dim"))
+        add(outer, label("\n".join(meta), "rw-dim"))
 
-    entry = Gtk.PasswordEntry()
-    entry.set_show_peek_icon(True)
+    if v4:
+        entry = Gtk.PasswordEntry()
+        entry.set_show_peek_icon(True)
+    else:
+        entry = Gtk.Entry()
+        entry.set_visibility(False)
+        entry.set_input_purpose(Gtk.InputPurpose.PASSWORD)
     entry.set_hexpand(True)
     pw_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
-    pw_row.append(label(_("Password:"), wrap=False))
-    pw_row.append(entry)
-    outer.append(pw_row)
+    add(pw_row, label(_("Password:"), do_wrap=False))
+    add(pw_row, entry, expand=True)
+    add(outer, pw_row)
 
     buttons = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
     buttons.set_halign(Gtk.Align.END)
     cancel = Gtk.Button(label=_("Cancel"))
     ok = Gtk.Button(label=_("Authorize"))
-    ok.add_css_class("suggested-action")
-    buttons.append(cancel)
-    buttons.append(ok)
-    outer.append(buttons)
+    css_class(ok, "suggested-action")
+    add(buttons, cancel)
+    add(buttons, ok)
+    add(outer, buttons)
 
     def finish(password: str | None) -> None:
-        result["password"] = password
-        win.destroy()
-        loop.quit()
+        if loop.is_running():
+            result["password"] = password
+            win.destroy()
+            loop.quit()
 
     ok.connect("clicked", lambda *_a: finish(entry.get_text()))
     entry.connect("activate", lambda *_a: finish(entry.get_text()))
     cancel.connect("clicked", lambda *_a: finish(None))
-    win.connect("close-request", lambda *_a: (finish(None), False)[1])
-    keys = Gtk.EventControllerKey()
-    keys.connect("key-pressed", lambda _c, keyval, *_a: (finish(None), True)[1] if keyval == Gdk.KEY_Escape else False)
-    win.add_controller(keys)
+    if v4:
+        win.connect("close-request", lambda *_a: (finish(None), False)[1])
+        keys = Gtk.EventControllerKey()
+        keys.connect("key-pressed",
+                     lambda _c, keyval, *_a: (finish(None), True)[1] if keyval == Gdk.KEY_Escape else False)
+        win.add_controller(keys)
+    else:
+        win.connect("delete-event", lambda *_a: (finish(None), False)[1])
+        win.connect("key-press-event",
+                    lambda _w, ev: (finish(None), True)[1] if ev.keyval == Gdk.KEY_Escape else False)
 
     # palette from the theme's text colour: light text → dark theme
     probe = Gtk.Label()
-    outer.append(probe)
-    win.present()
-    color = probe.get_color()
-    outer.remove(probe)
+    add(outer, probe)
+    if v4:
+        win.present()
+        color = probe.get_color()
+        outer.remove(probe)
+    else:
+        win.show_all()
+        color = probe.get_style_context().get_color(Gtk.StateFlags.NORMAL)
+        outer.remove(probe)
     dark = (0.2126 * color.red + 0.7152 * color.green + 0.0722 * color.blue) > 0.5
     css = CSS.format(**PALETTES["dark" if dark else "light"])
     provider = Gtk.CssProvider()
-    if hasattr(provider, "load_from_string"):  # GTK ≥ 4.12
+    if v4 and hasattr(provider, "load_from_string"):  # GTK ≥ 4.12
         provider.load_from_string(css)
-    else:
+    elif v4:
         provider.load_from_data(css.encode(), -1)
-    add_provider = getattr(Gtk, "style_context_add_provider_for_display", None) or \
-        Gtk.StyleContext.add_provider_for_display
-    add_provider(win.get_display(), provider, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
+    else:
+        provider.load_from_data(css.encode())
+    if v4:
+        add_provider = getattr(Gtk, "style_context_add_provider_for_display", None) or \
+            Gtk.StyleContext.add_provider_for_display
+        add_provider(win.get_display(), provider, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
+    else:
+        Gtk.StyleContext.add_provider_for_screen(Gdk.Screen.get_default(), provider,
+                                                 Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
     entry.grab_focus()
 
     if req.screenshot:
         def shoot() -> bool:
-            w, h = win.get_width(), win.get_height()
-            paintable = Gtk.WidgetPaintable.new(win)
-            snap = Gtk.Snapshot()
-            paintable.snapshot(snap, w, h)
-            node = snap.to_node()
-            if node is not None:
-                win.get_renderer().render_texture(node, None).save_to_png(req.screenshot)
+            if v4:
+                w, h = win.get_width(), win.get_height()
+                paintable = Gtk.WidgetPaintable.new(win)
+                snap = Gtk.Snapshot()
+                paintable.snapshot(snap, w, h)
+                node = snap.to_node()
+                if node is not None:
+                    win.get_renderer().render_texture(node, None).save_to_png(req.screenshot)
+            else:
+                import cairo
+                alloc = win.get_allocation()
+                surface = cairo.ImageSurface(cairo.FORMAT_ARGB32, alloc.width, alloc.height)
+                win.draw(cairo.Context(surface))
+                surface.write_to_png(req.screenshot)
             finish(None)
             return False
         GLib.timeout_add(700, shoot)
@@ -1044,7 +1142,7 @@ def show_dialog(req: Request) -> str | None:
     if os.environ.get("ROOTWHY_DIALOG") != "fallback":
         try:
             return gtk_dialog(req)
-        except (ImportError, ValueError, RuntimeError, AttributeError):
+        except (ImportError, ValueError, RuntimeError, AttributeError):  # no GTK 4/3 or no display
             if req.screenshot:
                 raise
     return fallback_dialog(req)

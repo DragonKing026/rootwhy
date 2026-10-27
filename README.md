@@ -82,22 +82,23 @@ warns when the program or script is not owned by root or is writable by others).
 
 ## Installation
 
-Requirements: Linux, `sudo`, Python 3.9+, and for the full dialog GTK 4 with PyGObject. Without GTK 4 it falls back to
-`kdialog` or `zenity` (reason and command split into lines, no colours or hover).
+One file, nothing else to install. Download it from the
+[latest release](https://github.com/DragonKing026/rootwhy/releases/latest), check the checksum, make it executable:
 
 ```bash
-# Fedora
-sudo dnf install python3-gobject gtk4
-# Debian, Ubuntu, Kubuntu
-sudo apt install python3-gi gir1.2-gtk-4.0
-
-git clone https://github.com/DragonKing026/rootwhy.git ~/.local/share/rootwhy
-ln -s ~/.local/share/rootwhy/rootwhy ~/.local/bin/rootwhy
+mkdir -p ~/.local/bin && cd ~/.local/bin
+curl -fsSLO https://github.com/DragonKing026/rootwhy/releases/latest/download/rootwhy
+curl -fsSL https://github.com/DragonKing026/rootwhy/releases/latest/download/SHA256SUMS | sha256sum -c
+chmod +x rootwhy
 rootwhy --version
 ```
 
-Works on KDE Plasma and GNOME, Wayland and X11. Update: `git -C ~/.local/share/rootwhy pull`. Uninstall: remove the
-link and the directory (and `~/.local/state/rootwhy` for the log).
+It uses what a Linux desktop already has: `sudo`, Python 3 and the GTK bindings for Python (PyGObject) — GTK 4, or
+GTK 3 when GTK 4 is missing. Where neither is available it falls back to `kdialog` (KDE) or `zenity` (GNOME): the
+reason and the command split into lines, without colours and hover. Works on KDE Plasma and GNOME, Wayland and X11.
+
+Update: download the new release the same way. Uninstall: `rm ~/.local/bin/rootwhy` (and `~/.local/state/rootwhy`
+for the log).
 
 ## Language
 
@@ -110,7 +111,10 @@ or `ROOTWHY_LANG=pl`. Descriptions taken from `man` are in whatever language you
 python3 -m unittest discover tests        # command model, explanations, translations (no GTK, no sudo)
 ./rootwhy --preview -r "Testing the dialog." -- install -m 644 a /etc/b
 ./rootwhy --screenshot out.png -r "Testing the dialog." -- systemctl restart foo   # renders the window to PNG
+ROOTWHY_GTK=3 ./rootwhy --preview -r "Testing GTK 3." -- true                      # force the GTK 3 dialog
 ```
+
+The logo is embedded in the program (`LOGO_SVG`, kept equal to `logo.svg` by a test), so the release is one file.
 
 The program is a single file on purpose — it receives your password, so it should be easy to read in one sitting.
 Ideas and fixes for the built-in descriptions (`COMMANDS`, `_O`, `SUBCOMMANDS`) are welcome.

@@ -224,6 +224,11 @@ class Security(unittest.TestCase):
             os.environ.update(saved)
 
 
+class Release(unittest.TestCase):
+    def test_embedded_logo_matches_file(self):
+        self.assertEqual(rw.LOGO_SVG, (_path.parent / "logo.svg").read_text())
+
+
 class Cli(unittest.TestCase):
     def test_reason_required(self):
         self.assertEqual(rw.main_mode(["true"]), 2)

@@ -80,22 +80,24 @@ PAM, np. czytnik linii papilarnych, całkowicie pomijają okienko.
 
 ## Instalacja
 
-Wymagania: Linux, `sudo`, Python 3.9+, a dla pełnego okienka GTK 4 z PyGObject. Bez GTK 4 używa `kdialog` albo
-`zenity` (powód i polecenie w wierszach, bez kolorów i dymków).
+Jeden plik, nic więcej do instalowania. Pobierz go z
+[najnowszego wydania](https://github.com/DragonKing026/rootwhy/releases/latest), sprawdź sumę i nadaj prawo
+uruchamiania:
 
 ```bash
-# Fedora
-sudo dnf install python3-gobject gtk4
-# Debian, Ubuntu, Kubuntu
-sudo apt install python3-gi gir1.2-gtk-4.0
-
-git clone https://github.com/DragonKing026/rootwhy.git ~/.local/share/rootwhy
-ln -s ~/.local/share/rootwhy/rootwhy ~/.local/bin/rootwhy
+mkdir -p ~/.local/bin && cd ~/.local/bin
+curl -fsSLO https://github.com/DragonKing026/rootwhy/releases/latest/download/rootwhy
+curl -fsSL https://github.com/DragonKing026/rootwhy/releases/latest/download/SHA256SUMS | sha256sum -c
+chmod +x rootwhy
 rootwhy --version
 ```
 
-Działa w KDE Plasma i GNOME, na Waylandzie i X11. Aktualizacja: `git -C ~/.local/share/rootwhy pull`. Odinstalowanie:
-usuń dowiązanie i katalog (oraz `~/.local/state/rootwhy` z dziennikiem).
+Korzysta z tego, co pulpit Linuksa już ma: `sudo`, Python 3 i powiązania GTK dla Pythona (PyGObject) — GTK 4, a gdy
+go brak, GTK 3. Gdy nie ma żadnego, używa `kdialog` (KDE) albo `zenity` (GNOME): powód i polecenie w wierszach, bez
+kolorów i dymków. Działa w KDE Plasma i GNOME, na Waylandzie i X11.
+
+Aktualizacja: pobierz nowe wydanie tak samo. Odinstalowanie: `rm ~/.local/bin/rootwhy` (oraz `~/.local/state/rootwhy`
+z dziennikiem).
 
 ## Język
 
@@ -108,7 +110,10 @@ albo `ROOTWHY_LANG=pl`. Opisy z `man` są w języku zainstalowanych stron man.
 python3 -m unittest discover tests        # model polecenia, wyjaśnienia, tłumaczenia (bez GTK i sudo)
 ./rootwhy --preview -r "Test okienka." -- install -m 644 a /etc/b
 ./rootwhy --screenshot out.png -r "Test okienka." -- systemctl restart foo   # okno do pliku PNG
+ROOTWHY_GTK=3 ./rootwhy --preview -r "Test GTK 3." -- true                  # wymuszenie okienka GTK 3
 ```
+
+Logo jest wbudowane w program (`LOGO_SVG`, test pilnuje zgodności z `logo.svg`), więc wydanie to jeden plik.
 
 Program jest celowo jednym plikiem — dostaje Twoje hasło, więc powinno się go dać przeczytać za jednym posiedzeniem.
 
