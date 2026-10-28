@@ -3,3 +3,6 @@ __pycache__/
 out.png
 .ruff_cache/
 .directory
+
+# git worktrees (agents)
+.claude/worktrees/
