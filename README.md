@@ -92,8 +92,16 @@ warns when the program or script is not owned by root or is writable by others).
 
 ## Installation
 
-**One script** installs everything: the program, the GTK bindings it needs and the Claude Code plugin. Download it,
-read it, run it:
+Two ways — the same result:
+
+- **A. Script** — one command does all three steps below.
+- **B. Manually** — the full list, step by step.
+
+Needed in both cases: Linux with a desktop (KDE Plasma or GNOME, Wayland or X11), `sudo`, `/usr/bin/python3`, `curl`.
+
+### A. Script
+
+Download it, read it, run it:
 
 ```bash
 curl -fsSLO https://raw.githubusercontent.com/DragonKing026/rootwhy/main/install.sh
@@ -111,11 +119,9 @@ bash install.sh
 everything. Without a terminal (e.g. started by an agent) step 2 runs only with `--yes`, and then the password is asked
 for by rootwhy's own dialog.
 
-Without GTK the dialog falls back to `kdialog` (KDE) or `zenity` (GNOME): the reason and the command split into lines,
-without colours and hover. Works on KDE Plasma and GNOME, Wayland and X11.
+### B. Manually
 
-<details>
-<summary>Manual installation (program only)</summary>
+**1. The program** — one file from the release, checked against the checksums:
 
 ```bash
 mkdir -p ~/.local/bin && cd ~/.local/bin
@@ -125,14 +131,43 @@ chmod +x rootwhy
 rootwhy --version
 ```
 
-GTK for Python: Fedora `sudo dnf install python3-gobject gtk4`, Debian/Ubuntu `sudo apt install python3-gi
-gir1.2-gtk-4.0`, Arch `sudo pacman -S python-gobject gtk4`, openSUSE `sudo zypper install python3-gobject
-typelib-1_0-Gtk-4_0`.
+`~/.local/bin` must be in `PATH`.
 
-</details>
+**2. GTK for Python** — for the full dialog (colours, descriptions on hover). It must be the system package, because
+rootwhy runs on `/usr/bin/python3` (not a venv, not `pip`):
 
-Uninstall: `rm ~/.local/bin/rootwhy`, `claude plugin uninstall rootwhy@rootwhy` (and `~/.local/state/rootwhy` for the
-log).
+```bash
+sudo dnf install python3-gobject gtk4                               # Fedora
+sudo apt install python3-gi gir1.2-gtk-4.0                          # Debian / Ubuntu
+sudo pacman -S --needed python-gobject gtk4                         # Arch
+sudo zypper install python3-gobject typelib-1_0-Gtk-4_0             # openSUSE
+/usr/bin/python3 -c 'import gi; gi.require_version("Gtk", "4.0")' && echo OK
+```
+
+GTK 3 works too, when GTK 4 is not available. Without either, the dialog falls back to `kdialog` (KDE) or `zenity`
+(GNOME): the reason and the command split into lines, without colours and hover.
+
+**3. The Claude Code plugin** (optional, for AI agents) — skill + hook that stops bare `sudo`:
+
+```bash
+claude plugin marketplace add DragonKing026/rootwhy
+claude plugin install rootwhy@rootwhy --scope user
+```
+
+or inside Claude Code: `/plugin marketplace add DragonKing026/rootwhy`, then `/plugin install rootwhy@rootwhy`. Active
+in new sessions.
+
+**4. Check** — shows the dialog, runs nothing:
+
+```bash
+rootwhy --preview -r "Testing the dialog." -- install -m 644 a /etc/b
+```
+
+### Update and uninstall
+
+Update: run `install.sh` again, or repeat step 1 and `claude plugin marketplace update rootwhy && claude plugin update
+rootwhy@rootwhy`. Uninstall: `rm ~/.local/bin/rootwhy`, `claude plugin uninstall rootwhy@rootwhy` (and
+`~/.local/state/rootwhy` for the log).
 
 ## Language
 

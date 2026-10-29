@@ -89,8 +89,17 @@ PAM, np. czytnik linii papilarnych, całkowicie pomijają okienko.
 
 ## Instalacja
 
-**Jeden skrypt** instaluje wszystko: program, potrzebne mu GTK i wtyczkę Claude Code. Pobierz go, przeczytaj,
-uruchom:
+Dwa sposoby — ten sam wynik:
+
+- **A. Skrypt** — jedno polecenie robi wszystkie trzy kroki z listy niżej.
+- **B. Ręcznie** — pełna lista, krok po kroku.
+
+W obu przypadkach potrzebne są: Linux z pulpitem (KDE Plasma albo GNOME, Wayland albo X11), `sudo`, `/usr/bin/python3`,
+`curl`.
+
+### A. Skrypt
+
+Pobierz, przeczytaj, uruchom:
 
 ```bash
 curl -fsSLO https://raw.githubusercontent.com/DragonKing026/rootwhy/main/install.sh
@@ -108,11 +117,9 @@ bash install.sh
 aktualizuje. Bez terminala (np. uruchomiony przez agenta) krok 2 działa tylko z `--yes`, a o hasło pyta wtedy okienko
 samego rootwhy.
 
-Bez GTK okienko to `kdialog` (KDE) albo `zenity` (GNOME): powód i polecenie w wierszach, bez kolorów i dymków. Działa
-w KDE Plasma i GNOME, na Waylandzie i X11.
+### B. Ręcznie
 
-<details>
-<summary>Instalacja ręczna (sam program)</summary>
+**1. Program** — jeden plik z wydania, sprawdzony sumami:
 
 ```bash
 mkdir -p ~/.local/bin && cd ~/.local/bin
@@ -122,14 +129,43 @@ chmod +x rootwhy
 rootwhy --version
 ```
 
-GTK dla Pythona: Fedora `sudo dnf install python3-gobject gtk4`, Debian/Ubuntu `sudo apt install python3-gi
-gir1.2-gtk-4.0`, Arch `sudo pacman -S python-gobject gtk4`, openSUSE `sudo zypper install python3-gobject
-typelib-1_0-Gtk-4_0`.
+`~/.local/bin` musi być w `PATH`.
 
-</details>
+**2. GTK dla Pythona** — dla pełnego okienka (kolory, opisy po najechaniu). Musi to być pakiet systemowy, bo rootwhy
+działa na `/usr/bin/python3` (nie venv, nie `pip`):
 
-Odinstalowanie: `rm ~/.local/bin/rootwhy`, `claude plugin uninstall rootwhy@rootwhy` (oraz `~/.local/state/rootwhy`
-z dziennikiem).
+```bash
+sudo dnf install python3-gobject gtk4                               # Fedora
+sudo apt install python3-gi gir1.2-gtk-4.0                          # Debian / Ubuntu
+sudo pacman -S --needed python-gobject gtk4                         # Arch
+sudo zypper install python3-gobject typelib-1_0-Gtk-4_0             # openSUSE
+/usr/bin/python3 -c 'import gi; gi.require_version("Gtk", "4.0")' && echo OK
+```
+
+GTK 3 też wystarczy, gdy GTK 4 nie ma. Bez żadnego okienko to `kdialog` (KDE) albo `zenity` (GNOME): powód
+i polecenie w wierszach, bez kolorów i dymków.
+
+**3. Wtyczka Claude Code** (opcjonalnie, dla agentów AI) — skill + hook zatrzymujący `sudo` wprost:
+
+```bash
+claude plugin marketplace add DragonKing026/rootwhy
+claude plugin install rootwhy@rootwhy --scope user
+```
+
+albo w Claude Code: `/plugin marketplace add DragonKing026/rootwhy`, potem `/plugin install rootwhy@rootwhy`. Działa
+w nowych sesjach.
+
+**4. Sprawdzenie** — pokazuje okienko, niczego nie uruchamia:
+
+```bash
+rootwhy --preview -r "Test okienka." -- install -m 644 a /etc/b
+```
+
+### Aktualizacja i odinstalowanie
+
+Aktualizacja: ponownie `install.sh` albo krok 1 i `claude plugin marketplace update rootwhy && claude plugin update
+rootwhy@rootwhy`. Odinstalowanie: `rm ~/.local/bin/rootwhy`, `claude plugin uninstall rootwhy@rootwhy` (oraz
+`~/.local/state/rootwhy` z dziennikiem).
 
 ## Język
 
