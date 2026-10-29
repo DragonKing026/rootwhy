@@ -54,7 +54,7 @@ The repository is also a Claude Code plugin: a **skill** that tells the agent wh
 /plugin install rootwhy@rootwhy
 ```
 
-The plugin does not install the program — do that first (see Installation). For other agents put the same rule in
+The plugin does not install the program — [`install.sh`](#installation) installs both. For other agents put the same rule in
 `AGENTS.md`:
 
 ```markdown
@@ -92,8 +92,30 @@ warns when the program or script is not owned by root or is writable by others).
 
 ## Installation
 
-One file, nothing else to install. Download it from the
-[latest release](https://github.com/DragonKing026/rootwhy/releases/latest), check the checksum, make it executable:
+**One script** installs everything: the program, the GTK bindings it needs and the Claude Code plugin. Download it,
+read it, run it:
+
+```bash
+curl -fsSLO https://raw.githubusercontent.com/DragonKing026/rootwhy/main/install.sh
+less install.sh
+bash install.sh
+```
+
+| Step | What it does | Skip with |
+| --- | --- | --- |
+| 1. Program | downloads `rootwhy` from the [latest release](https://github.com/DragonKing026/rootwhy/releases/latest), checks it against `SHA256SUMS`, puts it in `~/.local/bin` | — (`--dir DIR`, `--version vX.Y.Z`) |
+| 2. GTK | when `/usr/bin/python3` cannot import GTK 4 or 3, installs PyGObject + GTK 4 with `dnf`, `apt`, `pacman` or `zypper` — asks first, then `sudo` | `--no-gtk` |
+| 3. Plugin | when `claude` is installed: adds the marketplace and installs `rootwhy@rootwhy` for your user (skill + hook) | `--no-plugin` |
+
+`--yes` installs the packages without asking; `bash install.sh --help` lists the options. Running it again updates
+everything. Without a terminal (e.g. started by an agent) step 2 runs only with `--yes`, and then the password is asked
+for by rootwhy's own dialog.
+
+Without GTK the dialog falls back to `kdialog` (KDE) or `zenity` (GNOME): the reason and the command split into lines,
+without colours and hover. Works on KDE Plasma and GNOME, Wayland and X11.
+
+<details>
+<summary>Manual installation (program only)</summary>
 
 ```bash
 mkdir -p ~/.local/bin && cd ~/.local/bin
@@ -103,12 +125,14 @@ chmod +x rootwhy
 rootwhy --version
 ```
 
-It uses what a Linux desktop already has: `sudo`, Python 3 and the GTK bindings for Python (PyGObject) — GTK 4, or
-GTK 3 when GTK 4 is missing. Where neither is available it falls back to `kdialog` (KDE) or `zenity` (GNOME): the
-reason and the command split into lines, without colours and hover. Works on KDE Plasma and GNOME, Wayland and X11.
+GTK for Python: Fedora `sudo dnf install python3-gobject gtk4`, Debian/Ubuntu `sudo apt install python3-gi
+gir1.2-gtk-4.0`, Arch `sudo pacman -S python-gobject gtk4`, openSUSE `sudo zypper install python3-gobject
+typelib-1_0-Gtk-4_0`.
 
-Update: download the new release the same way. Uninstall: `rm ~/.local/bin/rootwhy` (and `~/.local/state/rootwhy`
-for the log).
+</details>
+
+Uninstall: `rm ~/.local/bin/rootwhy`, `claude plugin uninstall rootwhy@rootwhy` (and `~/.local/state/rootwhy` for the
+log).
 
 ## Language
 
