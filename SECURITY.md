@@ -4,7 +4,9 @@
 
 Please report vulnerabilities privately through GitHub: open the **Security**
 tab of this repository and choose **Report a vulnerability** (private
-vulnerability reporting). Do not open a public issue for a security problem.
+vulnerability reporting), or go straight to
+<https://github.com/DragonKing026/rootwhy/security/advisories/new>.
+Do not open a public issue for a security problem.
 
 ## Scope
 
