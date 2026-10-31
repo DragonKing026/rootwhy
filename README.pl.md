@@ -119,7 +119,7 @@ bash install.sh
 
 | Krok | Co robi | Pominięcie |
 | --- | --- | --- |
-| 1. Programy | pobiera `rootwhy` i `rootwhy-gtk` dla Twojego procesora z wydania `v3.0.0`, sprawdza oba w `SHA256SUMS`, kładzie obok siebie w `~/.local/bin` | — (`--dir KATALOG`, `--version vX.Y.Z`) |
+| 1. Programy | pobiera `rootwhy` i `rootwhy-gtk` dla Twojego procesora z wydania `v3.0.1`, sprawdza oba w `SHA256SUMS`, kładzie obok siebie w `~/.local/bin` | — (`--dir KATALOG`, `--version vX.Y.Z`) |
 | 2. GTK | sprawdza, czy `rootwhy-gtk` znajduje GTK 4; jeśli nie, wypisuje pakiet do doinstalowania dla `dnf`, `apt`, `pacman` albo `zypper` (nic nie instaluje jako root) i mówi, że do tego czasu okienko to `zenity` / `kdialog` | `--no-gtk` (pomija też `rootwhy-gtk`) |
 | 3. Wtyczka | gdy jest `claude`: dodaje marketplace i instaluje `rootwhy@rootwhy` dla użytkownika (skill + hook) | `--no-plugin` |
 
@@ -133,7 +133,7 @@ docelowym.
 
 ```bash
 ARCH=$(uname -m)    # x86_64 albo aarch64
-BASE=https://github.com/DragonKing026/rootwhy/releases/download/v3.0.0
+BASE=https://github.com/DragonKing026/rootwhy/releases/download/v3.0.1
 cd "$(mktemp -d)"
 curl -fsSLO "$BASE/rootwhy-linux-$ARCH" -O "$BASE/rootwhy-gtk-linux-$ARCH" -O "$BASE/SHA256SUMS"
 sha256sum -c --ignore-missing SHA256SUMS

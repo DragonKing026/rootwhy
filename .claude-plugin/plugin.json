@@ -1,6 +1,6 @@
 {
   "name": "rootwhy",
-  "version": "3.0.0",
+  "version": "3.0.1",
   "description": "Root commands through rootwhy: a password dialog that shows why, the command in coloured parts and what each part does from the system's man pages. Skill for the agent, hook that stops bare sudo/pkexec/doas/run0/su.",
   "author": {
     "name": "DragonKing026"

@@ -65,7 +65,7 @@ fn askpass_refuses_without_sudo_parent() {
 #[test]
 fn version_and_help() {
     let o = rootwhy().arg("--version").output().unwrap();
-    assert_eq!((code(&o), String::from_utf8_lossy(&o.stdout).as_ref()), (0, "rootwhy 3.0.0\n"));
+    assert_eq!((code(&o), String::from_utf8_lossy(&o.stdout).as_ref()), (0, "rootwhy 3.0.1\n"));
     let o = rootwhy().env("COLUMNS", "80").arg("--help").output().unwrap();
     assert_eq!(code(&o), 0);
     let text = String::from_utf8_lossy(&o.stdout);

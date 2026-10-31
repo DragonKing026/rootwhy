@@ -450,7 +450,7 @@ mod tests {
     fn help_and_version() {
         for a in [&["--version", "-x"][..], &["-x", "--version"], &["--vers"]] {
             let e = p(a).unwrap_err();
-            assert_eq!((e.code, e.stdout.as_str()), (0, "rootwhy 3.0.0\n"));
+            assert_eq!((e.code, e.stdout.as_str()), (0, "rootwhy 3.0.1\n"));
         }
         for a in [&["-h", "-x"][..], &["-hz"], &["--he"]] {
             let e = p(a).unwrap_err();

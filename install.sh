@@ -7,7 +7,7 @@ set -euo pipefail
 
 REPO="DragonKing026/rootwhy"
 DIR="$HOME/.local/bin"
-TAG="v3.0.0"
+TAG="v3.0.1"
 GTK=1
 PLUGIN=1
 
@@ -24,7 +24,7 @@ Installs rootwhy in three steps:
 
 Options:
   --dir DIR       install the programs into DIR (default ~/.local/bin; both go to the same directory)
-  --version TAG   release tag (default: v3.0.0)
+  --version TAG   release tag (default: v3.0.1)
   --no-gtk        do not install rootwhy-gtk and skip step 2 (the dialog uses zenity / kdialog)
   --no-plugin     skip step 3
   -y, --yes       accepted for compatibility; nothing is installed as root any more

@@ -121,7 +121,7 @@ bash install.sh
 
 | Step | What it does | Skip with |
 | --- | --- | --- |
-| 1. Programs | downloads `rootwhy` and `rootwhy-gtk` for your CPU from release `v3.0.0`, checks both against `SHA256SUMS`, puts them side by side in `~/.local/bin` | — (`--dir DIR`, `--version vX.Y.Z`) |
+| 1. Programs | downloads `rootwhy` and `rootwhy-gtk` for your CPU from release `v3.0.1`, checks both against `SHA256SUMS`, puts them side by side in `~/.local/bin` | — (`--dir DIR`, `--version vX.Y.Z`) |
 | 2. GTK | checks that `rootwhy-gtk` finds GTK 4; if not, prints the package to install for `dnf`, `apt`, `pacman` or `zypper` (nothing is installed as root) and says the dialog uses `zenity` / `kdialog` until then | `--no-gtk` (also skips `rootwhy-gtk`) |
 | 3. Plugin | when `claude` is installed: adds the marketplace and installs `rootwhy@rootwhy` for your user (skill + hook) | `--no-plugin` |
 
@@ -135,7 +135,7 @@ directory**: `rootwhy` looks for `rootwhy-gtk` only next to itself.
 
 ```bash
 ARCH=$(uname -m)    # x86_64 or aarch64
-BASE=https://github.com/DragonKing026/rootwhy/releases/download/v3.0.0
+BASE=https://github.com/DragonKing026/rootwhy/releases/download/v3.0.1
 cd "$(mktemp -d)"
 curl -fsSLO "$BASE/rootwhy-linux-$ARCH" -O "$BASE/rootwhy-gtk-linux-$ARCH" -O "$BASE/SHA256SUMS"
 sha256sum -c --ignore-missing SHA256SUMS
