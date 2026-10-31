@@ -47,14 +47,16 @@ Exit code: the command's own, `130` when cancelled, `2` for usage errors. A wron
 ### For AI agents — Claude Code plugin
 
 The repository is also a Claude Code plugin: a **skill** that tells the agent when and how to use rootwhy, and a
-**hook** that stops `sudo`, `pkexec`, `doas`, `run0` and `su` called directly and points to rootwhy instead.
+**hook** that stops `sudo`, `pkexec`, `doas`, `run0` and `su` called directly and points to rootwhy instead. The hook
+is the program itself: it runs `rootwhy hook`.
 
 ```text
 /plugin marketplace add DragonKing026/rootwhy
 /plugin install rootwhy@rootwhy
 ```
 
-The plugin does not install the program — [`install.sh`](#installation) installs both. For other agents put the same rule in
+The plugin does not install the program — [`install.sh`](#installation) installs both. **Without rootwhy 3.x in `PATH`
+or in `~/.local/bin` the hook does nothing** — bare `sudo` is then not stopped. For other agents put the same rule in
 `AGENTS.md`:
 
 ```markdown
@@ -75,9 +77,9 @@ without asking.
   description still shows the real command. The command name is resolved to an absolute path before sudo gets it.
   Nothing is shortened; arguments are shell-quoted, and invisible or bidirectional-control characters are shown as
   escapes such as `$'\u202e'`.
-- **Clean dialog process.** Python runs with `-I`, and the dialog keeps only display, session and language variables:
-  `PYTHONPATH`, `GIO_EXTRA_MODULES`, `GTK_*`, `QT_PLUGIN_PATH` and the like cannot load foreign code into the
-  process that holds your password.
+- **Clean dialog process.** The dialog runs as a separate program (`rootwhy-gtk`, found only next to `rootwhy` itself)
+  with a cleared environment that keeps only display, session and language variables: `GIO_EXTRA_MODULES`, `GTK_*`,
+  `QT_PLUGIN_PATH`, `LD_*` and the like cannot load foreign code into the process that holds your password.
 - **Nothing runs before you agree.** Descriptions come only from `man` / its parsed page (which never executes the
   command — `--help` is never called) and warnings from `stat` of the paths involved.
 - **The requester cannot put words in the tooltips.** Only the reason comes from the requester. A dishonest
@@ -97,7 +99,9 @@ Two ways — the same result:
 - **A. Script** — one command does all three steps below.
 - **B. Manually** — the full list, step by step.
 
-Needed in both cases: Linux with a desktop (KDE Plasma or GNOME, Wayland or X11), `sudo`, `/usr/bin/python3`, `curl`.
+Needed in both cases: Linux (x86_64 or aarch64, glibc ≥ 2.35) with a desktop (KDE Plasma or GNOME, Wayland or X11),
+`sudo`, `curl`. For the full dialog also GTK 4 ≥ 4.6 from your distribution (optional — without it the dialog uses
+`zenity` or `kdialog`). No Python is needed.
 
 ### A. Script
 
@@ -111,41 +115,44 @@ bash install.sh
 
 | Step | What it does | Skip with |
 | --- | --- | --- |
-| 1. Program | downloads `rootwhy` from the [latest release](https://github.com/DragonKing026/rootwhy/releases/latest), checks it against `SHA256SUMS`, puts it in `~/.local/bin` | — (`--dir DIR`, `--version vX.Y.Z`) |
-| 2. GTK | when `/usr/bin/python3` cannot import GTK 4 or 3, installs PyGObject + GTK 4 with `dnf`, `apt`, `pacman` or `zypper` — asks first, then `sudo` | `--no-gtk` |
+| 1. Programs | downloads `rootwhy` and `rootwhy-gtk` for your CPU from release `v3.0.0`, checks both against `SHA256SUMS`, puts them side by side in `~/.local/bin` | — (`--dir DIR`, `--version vX.Y.Z`) |
+| 2. GTK | checks that `rootwhy-gtk` finds GTK 4; if not, prints the package to install for `dnf`, `apt`, `pacman` or `zypper` (nothing is installed as root) and says the dialog uses `zenity` / `kdialog` until then | `--no-gtk` (also skips `rootwhy-gtk`) |
 | 3. Plugin | when `claude` is installed: adds the marketplace and installs `rootwhy@rootwhy` for your user (skill + hook) | `--no-plugin` |
 
-`--yes` installs the packages without asking; `bash install.sh --help` lists the options. Running it again updates
-everything. Without a terminal (e.g. started by an agent) step 2 runs only with `--yes`, and then the password is asked
-for by rootwhy's own dialog.
+`bash install.sh --help` lists the options. Running it again updates everything. It replaces a 2.x `rootwhy` in the
+target directory.
 
 ### B. Manually
 
-**1. The program** — one file from the release, checked against the checksums:
+**1. The programs** — two files from the release, checked against the checksums. They must end up **in the same
+directory**: `rootwhy` looks for `rootwhy-gtk` only next to itself.
 
 ```bash
-mkdir -p ~/.local/bin && cd ~/.local/bin
-curl -fsSLO https://github.com/DragonKing026/rootwhy/releases/latest/download/rootwhy
-curl -fsSL https://github.com/DragonKing026/rootwhy/releases/latest/download/SHA256SUMS | sha256sum -c
-chmod +x rootwhy
+ARCH=$(uname -m)    # x86_64 or aarch64
+BASE=https://github.com/DragonKing026/rootwhy/releases/download/v3.0.0
+cd "$(mktemp -d)"
+curl -fsSLO "$BASE/rootwhy-linux-$ARCH" -O "$BASE/rootwhy-gtk-linux-$ARCH" -O "$BASE/SHA256SUMS"
+sha256sum -c --ignore-missing SHA256SUMS
+mkdir -p ~/.local/bin
+install -m 755 "rootwhy-linux-$ARCH" ~/.local/bin/rootwhy
+install -m 755 "rootwhy-gtk-linux-$ARCH" ~/.local/bin/rootwhy-gtk
 rootwhy --version
 ```
 
 `~/.local/bin` must be in `PATH`.
 
-**2. GTK for Python** — for the full dialog (colours, descriptions on hover). It must be the system package, because
-rootwhy runs on `/usr/bin/python3` (not a venv, not `pip`):
+**2. GTK 4** — for the full dialog (colours, descriptions on hover): the system library, version 4.6 or newer.
 
 ```bash
-sudo dnf install python3-gobject gtk4                               # Fedora
-sudo apt install python3-gi gir1.2-gtk-4.0                          # Debian / Ubuntu
-sudo pacman -S --needed python-gobject gtk4                         # Arch
-sudo zypper install python3-gobject typelib-1_0-Gtk-4_0             # openSUSE
-/usr/bin/python3 -c 'import gi; gi.require_version("Gtk", "4.0")' && echo OK
+sudo dnf install gtk4                  # Fedora
+sudo apt install libgtk-4-1            # Debian / Ubuntu
+sudo pacman -S gtk4                    # Arch
+sudo zypper install libgtk-4-1         # openSUSE
+ldd ~/.local/bin/rootwhy-gtk | grep 'not found' || echo OK
 ```
 
-GTK 3 works too, when GTK 4 is not available. Without either, the dialog falls back to `kdialog` (KDE) or `zenity`
-(GNOME): the reason and the command split into lines, without colours and hover.
+Without GTK 4 the dialog falls back to `zenity` (GNOME) or `kdialog` (KDE): the reason and the command split into
+lines, without colours and hover.
 
 **3. The Claude Code plugin** (optional, for AI agents) — skill + hook that stops bare `sudo`:
 
@@ -166,8 +173,29 @@ rootwhy --preview -r "Testing the dialog." -- install -m 644 a /etc/b
 ### Update and uninstall
 
 Update: run `install.sh` again, or repeat step 1 and `claude plugin marketplace update rootwhy && claude plugin update
-rootwhy@rootwhy`. Uninstall: `rm ~/.local/bin/rootwhy`, `claude plugin uninstall rootwhy@rootwhy` (and
-`~/.local/state/rootwhy` for the log).
+rootwhy@rootwhy`. Uninstall: `rm ~/.local/bin/rootwhy ~/.local/bin/rootwhy-gtk`, `claude plugin uninstall
+rootwhy@rootwhy` (and `~/.local/state/rootwhy` for the log).
+
+### Building from source
+
+```bash
+sudo dnf install gtk4-devel            # Debian / Ubuntu: libgtk-4-dev
+cargo build --release                  # target/release/rootwhy and target/release/rootwhy-gtk
+```
+
+Copy both files into one directory. The GTK helper is built against GTK 4.6 API only, so the binaries from the release
+(built on Ubuntu 22.04) run on GTK 4.6 and newer.
+
+### Changes since 2.x
+
+rootwhy 3.0 is a rewrite in Rust with the same behaviour. Differences:
+
+- no Python and no PyGObject — two native programs: `rootwhy` (logic, askpass mode, the hook, the `zenity` / `kdialog`
+  fallback) and `rootwhy-gtk` (the dialog);
+- GTK 3 is no longer supported (`ROOTWHY_GTK=3` is gone) — GTK 4 ≥ 4.6, or the `zenity` / `kdialog` fallback;
+- command-line arguments must be valid UTF-8;
+- `--help` is printed without colours;
+- the plugin hook runs `rootwhy hook`; it does nothing when rootwhy 3.x is not installed.
 
 ## Language
 
@@ -178,16 +206,17 @@ are — install your distribution's translated man pages (e.g. `man-pages-pl`) t
 ## Development
 
 ```bash
-python3 -m unittest discover tests        # command model, man parsing, warnings, translations (no GTK, no sudo)
-./rootwhy --preview -r "Testing the dialog." -- install -m 644 a /etc/b
-./rootwhy --screenshot out.png -r "Testing the dialog." -- systemctl restart foo   # renders the window to PNG
-ROOTWHY_GTK=3 ./rootwhy --preview -r "Testing GTK 3." -- true                      # force the GTK 3 dialog
+cargo test                                # command model, man parsing, warnings, CLI, hook (no GTK, no sudo)
+cargo build --release
+target/release/rootwhy --preview -r "Testing the dialog." -- install -m 644 a /etc/b
+target/release/rootwhy --screenshot out.png -r "Testing the dialog." -- systemctl restart foo   # window to PNG
 ```
 
-The logo is embedded in the program (`LOGO_SVG`, kept equal to `logo.svg` by a test), so the release is one file.
+The logo is embedded in `rootwhy-gtk` (`include_str!` of `logo.svg`). A tag `v*` builds the release files with
+`.github/workflows/release.yml`.
 
-The program is a single file on purpose — it receives your password, so it should be easy to read in one sitting.
-Tests and `ruff` run on every push (`.github/workflows/test.yml`).
+The program that receives your password is small on purpose: `rootwhy-gtk` only draws the dialog (data in as JSON on
+stdin, the password out on stdout), and the logic lives in `rootwhy`.
 
 ## Related projects
 

@@ -47,14 +47,16 @@ Kod wyjścia: kod polecenia, `130` po anulowaniu, `2` przy złym użyciu. Po bł
 ### Dla agentów AI — wtyczka Claude Code
 
 Repozytorium jest też wtyczką Claude Code: **skill**, który mówi agentowi, kiedy i jak używać rootwhy, oraz **hook**,
-który zatrzymuje `sudo`, `pkexec`, `doas`, `run0` i `su` wywołane wprost i odsyła do rootwhy.
+który zatrzymuje `sudo`, `pkexec`, `doas`, `run0` i `su` wywołane wprost i odsyła do rootwhy. Hookiem jest sam
+program: uruchamia `rootwhy hook`.
 
 ```text
 /plugin marketplace add DragonKing026/rootwhy
 /plugin install rootwhy@rootwhy
 ```
 
-Wtyczka nie instaluje programu — [`install.sh`](#instalacja) instaluje jedno i drugie. Dla innych agentów ta sama reguła w `AGENTS.md`:
+Wtyczka nie instaluje programu — [`install.sh`](#instalacja) instaluje jedno i drugie. **Bez rootwhy 3.x w `PATH` albo
+w `~/.local/bin` hook nic nie robi** — goły `sudo` nie jest wtedy zatrzymywany. Dla innych agentów ta sama reguła w `AGENTS.md`:
 
 ```markdown
 Polecenia wymagające roota — tylko przez `rootwhy -r "Co i po co, 1–2 zdania." -- polecenie …`, nigdy `sudo`
@@ -73,8 +75,9 @@ wprost. Uprzedź użytkownika, że pojawi się okienko z hasłem. Kod 130 = anul
   polecenie. Nazwa polecenia jest zamieniana na ścieżkę bezwzględną, zanim dostanie ją sudo. Nic nie jest skracane;
   argumenty są w cudzysłowach jak w powłoce, a znaki niewidoczne i sterujące kierunkiem tekstu są pokazane jako
   np. `$'\u202e'`.
-- **Czysty proces okienka.** Python działa z `-I`, a okienko zachowuje tylko zmienne ekranu, sesji i języka:
-  `PYTHONPATH`, `GIO_EXTRA_MODULES`, `GTK_*`, `QT_PLUGIN_PATH` itp. nie wczytają obcego kodu do procesu z hasłem.
+- **Czysty proces okienka.** Okienko to osobny program (`rootwhy-gtk`, szukany tylko obok samego `rootwhy`)
+  z wyczyszczonym środowiskiem, które zachowuje tylko zmienne ekranu, sesji i języka: `GIO_EXTRA_MODULES`, `GTK_*`,
+  `QT_PLUGIN_PATH`, `LD_*` itp. nie wczytają obcego kodu do procesu z hasłem.
 - **Nic nie działa przed zgodą.** Opisy pochodzą tylko z `man` (nie uruchamia polecenia — `--help` nigdy nie jest
   wywoływane), a ostrzeżenia ze `stat` ścieżek.
 - **Proszący nie wpisze nic do dymków.** Od proszącego pochodzi tylko powód. Nieuczciwy proszący może skłamać
@@ -94,8 +97,9 @@ Dwa sposoby — ten sam wynik:
 - **A. Skrypt** — jedno polecenie robi wszystkie trzy kroki z listy niżej.
 - **B. Ręcznie** — pełna lista, krok po kroku.
 
-W obu przypadkach potrzebne są: Linux z pulpitem (KDE Plasma albo GNOME, Wayland albo X11), `sudo`, `/usr/bin/python3`,
-`curl`.
+W obu przypadkach potrzebne są: Linux (x86_64 lub aarch64, glibc ≥ 2.35) z pulpitem (KDE Plasma albo GNOME, Wayland
+albo X11), `sudo`, `curl`. Do pełnego okienka także GTK 4 ≥ 4.6 z dystrybucji (opcjonalnie — bez niego okienko to
+`zenity` albo `kdialog`). Python nie jest potrzebny.
 
 ### A. Skrypt
 
@@ -109,41 +113,43 @@ bash install.sh
 
 | Krok | Co robi | Pominięcie |
 | --- | --- | --- |
-| 1. Program | pobiera `rootwhy` z [najnowszego wydania](https://github.com/DragonKing026/rootwhy/releases/latest), sprawdza `SHA256SUMS`, kładzie do `~/.local/bin` | — (`--dir KATALOG`, `--version vX.Y.Z`) |
-| 2. GTK | gdy `/usr/bin/python3` nie wczyta GTK 4 ani 3 — instaluje PyGObject + GTK 4 przez `dnf`, `apt`, `pacman` albo `zypper`; najpierw pyta, potem `sudo` | `--no-gtk` |
+| 1. Programy | pobiera `rootwhy` i `rootwhy-gtk` dla Twojego procesora z wydania `v3.0.0`, sprawdza oba w `SHA256SUMS`, kładzie obok siebie w `~/.local/bin` | — (`--dir KATALOG`, `--version vX.Y.Z`) |
+| 2. GTK | sprawdza, czy `rootwhy-gtk` znajduje GTK 4; jeśli nie, wypisuje pakiet do doinstalowania dla `dnf`, `apt`, `pacman` albo `zypper` (nic nie instaluje jako root) i mówi, że do tego czasu okienko to `zenity` / `kdialog` | `--no-gtk` (pomija też `rootwhy-gtk`) |
 | 3. Wtyczka | gdy jest `claude`: dodaje marketplace i instaluje `rootwhy@rootwhy` dla użytkownika (skill + hook) | `--no-plugin` |
 
-`--yes` instaluje pakiety bez pytania; `bash install.sh --help` pokazuje opcje. Ponowne uruchomienie wszystko
-aktualizuje. Bez terminala (np. uruchomiony przez agenta) krok 2 działa tylko z `--yes`, a o hasło pyta wtedy okienko
-samego rootwhy.
+`bash install.sh --help` pokazuje opcje. Ponowne uruchomienie wszystko aktualizuje. Zastępuje `rootwhy` 2.x w katalogu
+docelowym.
 
 ### B. Ręcznie
 
-**1. Program** — jeden plik z wydania, sprawdzony sumami:
+**1. Programy** — dwa pliki z wydania, sprawdzone sumami. Muszą trafić **do tego samego katalogu**: `rootwhy` szuka
+`rootwhy-gtk` tylko obok siebie.
 
 ```bash
-mkdir -p ~/.local/bin && cd ~/.local/bin
-curl -fsSLO https://github.com/DragonKing026/rootwhy/releases/latest/download/rootwhy
-curl -fsSL https://github.com/DragonKing026/rootwhy/releases/latest/download/SHA256SUMS | sha256sum -c
-chmod +x rootwhy
+ARCH=$(uname -m)    # x86_64 albo aarch64
+BASE=https://github.com/DragonKing026/rootwhy/releases/download/v3.0.0
+cd "$(mktemp -d)"
+curl -fsSLO "$BASE/rootwhy-linux-$ARCH" -O "$BASE/rootwhy-gtk-linux-$ARCH" -O "$BASE/SHA256SUMS"
+sha256sum -c --ignore-missing SHA256SUMS
+mkdir -p ~/.local/bin
+install -m 755 "rootwhy-linux-$ARCH" ~/.local/bin/rootwhy
+install -m 755 "rootwhy-gtk-linux-$ARCH" ~/.local/bin/rootwhy-gtk
 rootwhy --version
 ```
 
 `~/.local/bin` musi być w `PATH`.
 
-**2. GTK dla Pythona** — dla pełnego okienka (kolory, opisy po najechaniu). Musi to być pakiet systemowy, bo rootwhy
-działa na `/usr/bin/python3` (nie venv, nie `pip`):
+**2. GTK 4** — dla pełnego okienka (kolory, opisy po najechaniu): biblioteka systemowa w wersji 4.6 lub nowszej.
 
 ```bash
-sudo dnf install python3-gobject gtk4                               # Fedora
-sudo apt install python3-gi gir1.2-gtk-4.0                          # Debian / Ubuntu
-sudo pacman -S --needed python-gobject gtk4                         # Arch
-sudo zypper install python3-gobject typelib-1_0-Gtk-4_0             # openSUSE
-/usr/bin/python3 -c 'import gi; gi.require_version("Gtk", "4.0")' && echo OK
+sudo dnf install gtk4                  # Fedora
+sudo apt install libgtk-4-1            # Debian / Ubuntu
+sudo pacman -S gtk4                    # Arch
+sudo zypper install libgtk-4-1         # openSUSE
+ldd ~/.local/bin/rootwhy-gtk | grep 'not found' || echo OK
 ```
 
-GTK 3 też wystarczy, gdy GTK 4 nie ma. Bez żadnego okienko to `kdialog` (KDE) albo `zenity` (GNOME): powód
-i polecenie w wierszach, bez kolorów i dymków.
+Bez GTK 4 okienko to `zenity` (GNOME) albo `kdialog` (KDE): powód i polecenie w wierszach, bez kolorów i dymków.
 
 **3. Wtyczka Claude Code** (opcjonalnie, dla agentów AI) — skill + hook zatrzymujący `sudo` wprost:
 
@@ -164,8 +170,29 @@ rootwhy --preview -r "Test okienka." -- install -m 644 a /etc/b
 ### Aktualizacja i odinstalowanie
 
 Aktualizacja: ponownie `install.sh` albo krok 1 i `claude plugin marketplace update rootwhy && claude plugin update
-rootwhy@rootwhy`. Odinstalowanie: `rm ~/.local/bin/rootwhy`, `claude plugin uninstall rootwhy@rootwhy` (oraz
-`~/.local/state/rootwhy` z dziennikiem).
+rootwhy@rootwhy`. Odinstalowanie: `rm ~/.local/bin/rootwhy ~/.local/bin/rootwhy-gtk`, `claude plugin uninstall
+rootwhy@rootwhy` (oraz `~/.local/state/rootwhy` z dziennikiem).
+
+### Budowa ze źródeł
+
+```bash
+sudo dnf install gtk4-devel            # Debian / Ubuntu: libgtk-4-dev
+cargo build --release                  # target/release/rootwhy i target/release/rootwhy-gtk
+```
+
+Oba pliki skopiuj do jednego katalogu. Pomocnik GTK używa wyłącznie API GTK 4.6, więc pliki z wydania (budowane na
+Ubuntu 22.04) działają z GTK 4.6 i nowszym.
+
+### Zmiany względem 2.x
+
+rootwhy 3.0 to przepisanie na Rust z tym samym działaniem. Różnice:
+
+- bez Pythona i PyGObject — dwa programy natywne: `rootwhy` (logika, tryb hasła, hook, zapas `zenity` / `kdialog`)
+  i `rootwhy-gtk` (okienko);
+- GTK 3 nie jest już obsługiwane (`ROOTWHY_GTK=3` nie ma) — GTK 4 ≥ 4.6 albo zapas `zenity` / `kdialog`;
+- argumenty wiersza poleceń muszą być poprawnym UTF-8;
+- `--help` wypisuje się bez kolorów;
+- hook wtyczki uruchamia `rootwhy hook`; bez zainstalowanego rootwhy 3.x nic nie robi.
 
 ## Język
 
@@ -176,16 +203,17 @@ polsku po instalacji tłumaczeń z dystrybucji (np. `man-pages-pl`).
 ## Rozwój
 
 ```bash
-python3 -m unittest discover tests        # model polecenia, odczyt man, ostrzeżenia, tłumaczenia (bez GTK i sudo)
-./rootwhy --preview -r "Test okienka." -- install -m 644 a /etc/b
-./rootwhy --screenshot out.png -r "Test okienka." -- systemctl restart foo   # okno do pliku PNG
-ROOTWHY_GTK=3 ./rootwhy --preview -r "Test GTK 3." -- true                  # wymuszenie okienka GTK 3
+cargo test                                # model polecenia, odczyt man, ostrzeżenia, CLI, hook (bez GTK i sudo)
+cargo build --release
+target/release/rootwhy --preview -r "Test okienka." -- install -m 644 a /etc/b
+target/release/rootwhy --screenshot out.png -r "Test okienka." -- systemctl restart foo   # okno do pliku PNG
 ```
 
-Logo jest wbudowane w program (`LOGO_SVG`, test pilnuje zgodności z `logo.svg`), więc wydanie to jeden plik.
+Logo jest wbudowane w `rootwhy-gtk` (`include_str!` z `logo.svg`). Tag `v*` buduje pliki wydania przez
+`.github/workflows/release.yml`.
 
-Program jest celowo jednym plikiem — dostaje Twoje hasło, więc powinno się go dać przeczytać za jednym posiedzeniem.
-Testy i `ruff` uruchamiają się przy każdym pushu (`.github/workflows/test.yml`).
+Program, który dostaje Twoje hasło, jest celowo mały: `rootwhy-gtk` tylko rysuje okienko (dane wchodzą jako JSON na
+stdin, hasło wychodzi na stdout), a logika jest w `rootwhy`.
 
 ## Licencja
 
