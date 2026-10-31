@@ -6,3 +6,6 @@ out.png
 
 # git worktrees (agents)
 .claude/worktrees/
+
+# Rust
+target/

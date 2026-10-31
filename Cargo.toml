@@ -1,0 +1,36 @@
+[package]
+name = "rootwhy"
+version = "3.0.0"
+edition = "2021"
+rust-version = "1.80"
+description = "Run a command as root after a password dialog that shows why, the command in coloured parts and what each part does."
+license = "GPL-3.0-or-later"
+repository = "https://github.com/DragonKing026/rootwhy"
+publish = false
+
+[lib]
+name = "rootwhy_core"
+path = "src/lib.rs"
+
+[[bin]]
+name = "rootwhy"
+path = "src/main.rs"
+
+[[bin]]
+name = "rootwhy-gtk"
+path = "src/bin/rootwhy-gtk.rs"
+
+[dependencies]
+libc = "0.2"
+regex = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+zeroize = "1"
+# only rootwhy-gtk uses it; API limited to GTK 4.6 (Ubuntu 22.04)
+gtk4 = { version = "0.9", features = ["v4_6"] }
+
+[profile.release]
+lto = true
+strip = true
+codegen-units = 1
+panic = "abort"
