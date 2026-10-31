@@ -8,8 +8,9 @@ use gtk4 as gtk;
 use gtk4::prelude::*;
 use gtk4::{gdk, glib, pango};
 use rootwhy_core::dialog::{DialogData, EXIT_CANCELLED, EXIT_NO_GTK};
+use rootwhy_core::modes::write_fd;
 use std::cell::RefCell;
-use std::io::{Read, Write};
+use std::io::Read;
 use std::process::ExitCode;
 use std::rc::Rc;
 use zeroize::Zeroize;
@@ -278,8 +279,8 @@ fn main() -> ExitCode {
     let password = result.borrow_mut().take();
     match password {
         Some(mut p) => {
-            let mut out = std::io::stdout().lock();
-            let written = out.write_all(p.as_bytes()).and_then(|_| out.flush()).is_ok();
+            // straight to fd 1: a buffered stdout would keep a copy of the password
+            let written = write_fd(1, p.as_bytes());
             p.zeroize();
             if written {
                 ExitCode::SUCCESS

@@ -86,18 +86,19 @@ fn state_write(path: &str, text: &str) {
     let _ = fs::write(path, text);
 }
 
-/// Write all of `buf` to a raw file descriptor (no buffering in between).
-fn write_fd(fd: libc::c_int, mut buf: &[u8]) {
+/// Write all of `buf` to a raw file descriptor (no buffering in between); false on a write error.
+pub fn write_fd(fd: libc::c_int, mut buf: &[u8]) -> bool {
     while !buf.is_empty() {
         let n = unsafe { libc::write(fd, buf.as_ptr().cast(), buf.len()) };
         if n < 0 {
             if std::io::Error::last_os_error().kind() == std::io::ErrorKind::Interrupted {
                 continue;
             }
-            return;
+            return false;
         }
         buf = &buf[n as usize..];
     }
+    true
 }
 
 /// Run by sudo -A: show the dialog, print the password. Only when the parent process is sudo — an inherited
