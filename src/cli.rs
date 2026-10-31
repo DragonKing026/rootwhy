@@ -132,18 +132,42 @@ pub fn term_columns() -> usize {
     80
 }
 
+/// textwrap.wrap for text with single spaces: greedy, and a word longer than the whole width is broken
+/// (it first fills what is left of the current line).
 fn wrap(text: &str, width: usize) -> Vec<String> {
     let mut lines: Vec<String> = Vec::new();
     let mut cur = String::new();
-    for w in text.split_whitespace() {
+    let mut cur_len = 0;
+    let mut queue: std::collections::VecDeque<String> = text.split_whitespace().map(str::to_string).collect();
+    while let Some(w) = queue.pop_front() {
         let wl = w.chars().count();
-        if !cur.is_empty() && cur.chars().count() + 1 + wl > width {
+        let sep = usize::from(!cur.is_empty());
+        if cur_len + sep + wl <= width {
+            if sep == 1 {
+                cur.push(' ');
+            }
+            cur.push_str(&w);
+            cur_len += sep + wl;
+        } else if wl > width {
+            let with_space = cur_len + usize::from(!cur.is_empty() && cur_len < width);
+            let space_left = if width < 1 { 1 } else { width - with_space };
+            let head: String = w.chars().take(space_left).collect();
+            let rest: String = w.chars().skip(space_left).collect();
+            if !head.is_empty() {
+                if !cur.is_empty() {
+                    cur.push(' ');
+                }
+                cur.push_str(&head);
+            }
             lines.push(std::mem::take(&mut cur));
+            cur_len = 0;
+            if !rest.is_empty() {
+                queue.push_front(rest);
+            }
+        } else {
+            lines.push(std::mem::replace(&mut cur, w));
+            cur_len = wl;
         }
-        if !cur.is_empty() {
-            cur.push(' ');
-        }
-        cur.push_str(w);
     }
     if !cur.is_empty() {
         lines.push(cur);
@@ -228,9 +252,9 @@ pub fn help_text(columns: usize) -> String {
         ("--version".into(), "show program's version number and exit".into()),
     ];
     let max_len = actions.iter().map(|a| a.0.chars().count()).chain([7]).max().unwrap_or(0) + 2;
-    let help_position = (max_len + 2).min(24);
+    let help_position = (max_len + 2).min(24.min(width.saturating_sub(20).max(4)));
     let help_width = width.saturating_sub(help_position).max(11);
-    let action_width = help_position - 2 - 2;
+    let action_width = help_position.saturating_sub(4);
 
     let mut out = usage_text(columns);
     out.push('\n');
@@ -433,6 +457,32 @@ mod tests {
             assert_eq!(e.code, 0);
             assert!(e.stdout.starts_with("usage: rootwhy [-h]"));
         }
+    }
+
+    #[test]
+    fn help_at_narrow_width_like_python() {
+        // from Python 3.14 argparse (rootwhy 2.0.0) with COLUMNS=40
+        let expected = "options:
+  -h, --help      show this help
+                  message and exit
+  -r, --reason REASON
+                  why the command is
+                  needed, 10–300
+                  characters
+                  (required)
+  --log-dir LOG_DIR
+                  log directory
+                  (default: $XDG_STATE
+                  _HOME/rootwhy)
+  --preview       only show the
+                  dialog; run nothing
+  --version       show program's
+                  version number and
+                  exit
+";
+        crate::i18n::set_lang(crate::i18n::Lang::En);
+        let h = help_text(40);
+        assert!(h.contains(expected), "{h}");
     }
 
     #[test]

@@ -373,6 +373,30 @@ mod tests {
     }
 
     #[test]
+    fn log_line_format() {
+        let dir = std::env::temp_dir().join(format!("rootwhy-log-{}", std::process::id())).join("sub");
+        log(&dir, "reason text", "cmd x", "start");
+        log(&dir, "reason text", "cmd x", "exit 0");
+        let files: Vec<_> = fs::read_dir(&dir).unwrap().map(|e| e.unwrap().path()).collect();
+        assert_eq!(files.len(), 1);
+        let name = files[0].file_name().unwrap().to_string_lossy().into_owned();
+        assert!(regex::Regex::new(r"^\d{6}\.log$").unwrap().is_match(&name), "{name}");
+        let text = fs::read_to_string(&files[0]).unwrap();
+        let re = regex::Regex::new(r"^\d{4}-\d\d-\d\d \d\d:\d\d:\d\d \| reason text \| cmd x \| (start|exit 0)$").unwrap();
+        assert_eq!(text.lines().count(), 2);
+        assert!(text.lines().all(|l| re.is_match(l)), "{text}");
+        fs::remove_dir_all(dir.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn state_file_is_private() {
+        let path = make_state_file().unwrap();
+        assert_eq!(fs::metadata(&path).unwrap().mode() & 0o777, 0o600);
+        assert!(Path::new(&path).file_name().unwrap().to_string_lossy().starts_with("rootwhy."));
+        fs::remove_file(path).unwrap();
+    }
+
+    #[test]
     fn clean_reason() {
         assert_eq!(clean("  a\tb\nc \u{7f}"), "a b c");
     }
