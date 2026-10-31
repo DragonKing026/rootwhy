@@ -5,7 +5,7 @@
 
 use crate::cli::{parse_args, REASON_MAX, REASON_MIN};
 use crate::command::shell_quote;
-use crate::dialog::{safe_environ, show_dialog, DialogError, Request};
+use crate::dialog::{safe_environ, sanitize_process_env, show_dialog, DialogError, Request};
 use crate::i18n::{tr, tr_with};
 use crate::util::{basename, getcwd, home_dir, normpath, realpath, which, which_env, SECURE_PATH};
 use std::fs;
@@ -13,6 +13,7 @@ use std::io::Write;
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use zeroize::Zeroizing;
 
 pub const SUDO_PATHS: [&str; 3] = ["/usr/bin/sudo", "/bin/sudo", "/usr/local/bin/sudo"];
 
@@ -85,6 +86,20 @@ fn state_write(path: &str, text: &str) {
     let _ = fs::write(path, text);
 }
 
+/// Write all of `buf` to a raw file descriptor (no buffering in between).
+fn write_fd(fd: libc::c_int, mut buf: &[u8]) {
+    while !buf.is_empty() {
+        let n = unsafe { libc::write(fd, buf.as_ptr().cast(), buf.len()) };
+        if n < 0 {
+            if std::io::Error::last_os_error().kind() == std::io::ErrorKind::Interrupted {
+                continue;
+            }
+            return;
+        }
+        buf = &buf[n as usize..];
+    }
+}
+
 /// Run by sudo -A: show the dialog, print the password. Only when the parent process is sudo — an inherited
 /// environment must not turn this into a password prompt for whoever started it.
 pub fn askpass_mode() -> i32 {
@@ -93,6 +108,8 @@ pub fn askpass_mode() -> i32 {
         eprintln!("{}", tr("rootwhy: askpass mode is only for sudo -A"));
         return 1;
     };
+    // every child from here on (man, zenity, kdialog, the helper) inherits only safe variables; nothing else runs yet
+    sanitize_process_env();
     let env: std::collections::HashMap<String, String> = safe_environ(std::env::vars()).into_iter().collect();
     let get = |k: &str| env.get(k).cloned().unwrap_or_default();
     let state = get("ROOTWHY_STATE");
@@ -123,11 +140,12 @@ pub fn askpass_mode() -> i32 {
     };
     match show_dialog(&req) {
         Ok(Some(password)) => {
-            let mut out = std::io::stdout().lock();
-            // the password is written as it was typed, followed by the newline sudo expects
-            let _ = out.write_all(&password);
-            let _ = out.write_all(b"\n");
-            let _ = out.flush();
+            // the password is written as it was typed, followed by the newline sudo expects — in one buffer straight
+            // to fd 1 (std's stdout keeps a buffered copy that is never wiped)
+            let mut line = Zeroizing::new(Vec::with_capacity(password.len() + 1));
+            line.extend_from_slice(&password);
+            line.push(b'\n');
+            write_fd(1, &line);
             0
         }
         Ok(None) => {
@@ -135,7 +153,10 @@ pub fn askpass_mode() -> i32 {
                 state_write(&state, "cancelled");
                 // sudo would print "no password was provided"; it has run nothing yet, so end it quietly — the parent
                 // rootwhy reports the cancel (sudo_parent_command checked that the parent is our sudo)
-                unsafe { libc::kill(ppid as libc::pid_t, libc::SIGKILL) };
+                // only if sudo is still our parent: if it died, its PID may belong to someone else by now
+                if unsafe { libc::getppid() } as u32 == ppid {
+                    unsafe { libc::kill(ppid as libc::pid_t, libc::SIGKILL) };
+                }
             }
             1
         }
@@ -343,6 +364,19 @@ mod tests {
         assert_eq!(parse_sudo_cmdline(b"sudo\0-A\0--\0true\0"), None); // without -k
         assert_eq!(parse_sudo_cmdline(b"sudo\0-k\0-A\0--\0"), None); // no command
         assert_eq!(parse_sudo_cmdline(b"/tmp/fake\0-k\0-A\0--\0true\0"), None); // not sudo
+    }
+
+    #[test]
+    fn write_fd_writes_everything() {
+        use std::io::Read;
+        let mut fds = [0 as libc::c_int; 2];
+        assert_eq!(unsafe { libc::pipe(fds.as_mut_ptr()) }, 0);
+        write_fd(fds[1], b"secret\n");
+        unsafe { libc::close(fds[1]) };
+        let mut f = unsafe { <fs::File as std::os::fd::FromRawFd>::from_raw_fd(fds[0]) };
+        let mut got = String::new();
+        f.read_to_string(&mut got).unwrap();
+        assert_eq!(got, "secret\n");
     }
 
     #[test]

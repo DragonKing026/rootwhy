@@ -160,6 +160,47 @@ pub fn helper_path() -> Option<std::path::PathBuf> {
     p.is_file().then_some(p)
 }
 
+/// Longest password read from a dialog (sudo itself stops at 255 characters).
+pub const PASSWORD_MAX: usize = 4096;
+
+/// Read what a dialog printed into one preallocated buffer that never grows (a growing `Vec` would leave
+/// un-wiped copies of the password in freed memory). Input beyond `PASSWORD_MAX` bytes is dropped.
+pub fn read_secret<R: Read>(r: &mut R) -> Zeroizing<Vec<u8>> {
+    let mut buf = Zeroizing::new(vec![0u8; PASSWORD_MAX]);
+    let mut n = 0;
+    while n < PASSWORD_MAX {
+        match r.read(&mut buf[n..]) {
+            Ok(0) => break,
+            Ok(k) => n += k,
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {}
+            Err(_) => break,
+        }
+    }
+    buf.truncate(n); // the bytes past n are still zeros and stay in the same allocation
+    buf
+}
+
+/// Keys of the variables `safe_environ` would drop.
+pub fn unsafe_env_keys<I: IntoIterator<Item = String>>(keys: I) -> Vec<String> {
+    keys.into_iter().filter(|k| !(SAFE_ENV.contains(&k.as_str()) || k.starts_with("LC_") || k.starts_with("ROOTWHY_"))).collect()
+}
+
+/// Make the environment of this whole process safe (askpass mode), so that no child — man, zenity, kdialog,
+/// the helper — gets a variable that loads foreign code (like Python's `_safe_environ`).
+/// Called first thing in askpass mode, while the process has a single thread: `remove_var`/`set_var` are
+/// not safe next to other threads (they are `unsafe` fns from edition 2024 on).
+pub fn sanitize_process_env() {
+    for k in unsafe_env_keys(std::env::vars_os().filter_map(|(k, _)| k.into_string().ok())) {
+        std::env::remove_var(k);
+    }
+    // names that are not valid UTF-8 are never in the safe list either
+    let bad: Vec<_> = std::env::vars_os().filter(|(k, _)| k.to_str().is_none()).map(|(k, _)| k).collect();
+    for k in bad {
+        std::env::remove_var(k);
+    }
+    std::env::set_var("PATH", SECURE_PATH);
+}
+
 /// Run the GTK helper. Ok(Some(password)) / Ok(None) = cancelled / Err(Unavailable).
 fn run_helper(req: &Request) -> Result<Option<Zeroizing<Vec<u8>>>, DialogError> {
     let helper = helper_path().ok_or(DialogError::Unavailable)?;
@@ -178,8 +219,8 @@ fn run_helper(req: &Request) -> Result<Option<Zeroizing<Vec<u8>>>, DialogError> 
         let _ = stdin.write_all(&json);
         json.zeroize();
     });
-    let mut out = Zeroizing::new(Vec::new());
-    let _ = stdout.read_to_end(&mut out);
+    let out = read_secret(&mut stdout);
+    drop(stdout);
     let _ = writer.join();
     let status = child.wait().map_err(|_| DialogError::Unavailable)?;
     match status.code() {
@@ -231,15 +272,27 @@ pub fn fallback_dialog(req: &Request) -> Result<Option<Zeroizing<Vec<u8>>>, Dial
     } else {
         return Err(DialogError::Other(tr("rootwhy: no dialog available (GTK 4, kdialog or zenity)")));
     };
-    let out = Command::new(&cmd[0])
-        .args(&cmd[1..])
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .output()
-        .map_err(|e| DialogError::Other(e.to_string()))?;
-    let mut stdout = Zeroizing::new(out.stdout);
-    if !out.status.success() {
+    run_fallback(&cmd, std::env::vars())
+}
+
+/// The kdialog / zenity process: cleared environment plus `safe_environ(vars)`, so a user's GTK_MODULES,
+/// QT_PLUGIN_PATH, LD_PRELOAD… never reach it. The program itself was found in SECURE_PATH, not the user's PATH.
+fn fallback_command<I: IntoIterator<Item = (String, String)>>(cmd: &[String], vars: I) -> Command {
+    let mut c = Command::new(&cmd[0]);
+    c.args(&cmd[1..]).env_clear().envs(safe_environ(vars)).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::null());
+    c
+}
+
+fn run_fallback<I: IntoIterator<Item = (String, String)>>(
+    cmd: &[String],
+    vars: I,
+) -> Result<Option<Zeroizing<Vec<u8>>>, DialogError> {
+    let mut child = fallback_command(cmd, vars).spawn().map_err(|e| DialogError::Other(e.to_string()))?;
+    let mut out = child.stdout.take().ok_or_else(|| DialogError::Other("no stdout".into()))?;
+    let mut stdout = read_secret(&mut out);
+    drop(out);
+    let status = child.wait().map_err(|e| DialogError::Other(e.to_string()))?;
+    if !status.success() {
         return Ok(None);
     }
     while stdout.last() == Some(&b'\n') {
@@ -284,6 +337,56 @@ mod tests {
         }
         assert_eq!((out["LANG"].as_str(), out["ROOTWHY_REASON"].as_str(), out["LC_TIME"].as_str()), ("pl_PL.UTF-8", "x", "C"));
         assert_eq!(out["PATH"], SECURE_PATH);
+    }
+
+    #[test]
+    fn fallback_dialog_child_gets_no_dangerous_env() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir().join(format!("rootwhy-fb-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let dump = dir.join("env.txt");
+        let fake = dir.join("zenity");
+        std::fs::write(&fake, format!("#!/bin/sh\n/usr/bin/env > '{}'\necho secret\n", dump.display())).unwrap();
+        std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let vars = [
+            ("GTK_MODULES", "/tmp/x.so"),
+            ("GIO_EXTRA_MODULES", "/tmp/x"),
+            ("QT_PLUGIN_PATH", "/tmp/x"),
+            ("LD_PRELOAD", "/tmp/x.so"),
+            ("DISPLAY", ":0"),
+            ("LANG", "C"),
+        ]
+        .map(|(k, v)| (k.to_string(), v.to_string()));
+        // also in the real environment of this process: env_clear must drop what the child would inherit
+        std::env::set_var("QT_PLUGIN_PATH", "/tmp/inherited");
+        let got = run_fallback(&[fake.to_string_lossy().into_owned()], vars).unwrap().unwrap();
+        assert_eq!(&got[..], b"secret");
+        let env = std::fs::read_to_string(&dump).unwrap();
+        for bad in ["GTK_MODULES", "GIO_EXTRA_MODULES", "QT_PLUGIN_PATH", "LD_PRELOAD"] {
+            assert!(!env.contains(bad), "{bad} leaked:\n{env}");
+        }
+        assert!(env.contains("DISPLAY=:0") && env.contains(&format!("PATH={SECURE_PATH}")), "{env}");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn unsafe_env_keys_lists_only_dangerous() {
+        let keys = ["GTK_MODULES", "LD_PRELOAD", "DISPLAY", "LC_ALL", "ROOTWHY_REASON", "PATH", "HOME", "FOO"].map(String::from);
+        let mut bad = unsafe_env_keys(keys);
+        bad.sort();
+        assert_eq!(bad, ["FOO", "GTK_MODULES", "LD_PRELOAD", "PATH"]);
+    }
+
+    #[test]
+    fn read_secret_is_bounded_and_does_not_grow() {
+        let mut short: &[u8] = b"hunter2\n";
+        let s = read_secret(&mut short);
+        assert_eq!(&s[..], b"hunter2\n");
+        assert_eq!(s.capacity(), PASSWORD_MAX);
+        let big = vec![b'a'; PASSWORD_MAX * 2];
+        let mut r: &[u8] = &big;
+        let s = read_secret(&mut r);
+        assert_eq!((s.len(), s.capacity()), (PASSWORD_MAX, PASSWORD_MAX));
     }
 
     #[test]
