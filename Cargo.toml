@@ -2,7 +2,7 @@
 name = "rootwhy"
 version = "3.0.0"
 edition = "2021"
-rust-version = "1.80"
+rust-version = "1.92"
 description = "Run a command as root after a password dialog that shows why, the command in coloured parts and what each part does."
 license = "GPL-3.0-or-later"
 repository = "https://github.com/DragonKing026/rootwhy"
