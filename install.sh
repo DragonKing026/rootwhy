@@ -65,14 +65,22 @@ if ((GTK)); then NAMES+=(rootwhy-gtk); fi
 say "rootwhy ($TAG, $ARCH) → $DIR"
 URL="https://github.com/$REPO/releases/download/$TAG"
 TMP=$(mktemp -d)
-trap 'rm -rf "$TMP"' EXIT
+STAGED=()
+trap 'rm -rf "$TMP"; if ((${#STAGED[@]})); then rm -f "${STAGED[@]}"; fi' EXIT
 curl -fsSL -o "$TMP/SHA256SUMS" "$URL/SHA256SUMS" || die "download failed: $URL/SHA256SUMS"
 for n in "${NAMES[@]}"; do
   curl -fsSL -o "$TMP/$n-linux-$ARCH" "$URL/$n-linux-$ARCH" || die "download failed: $URL/$n-linux-$ARCH"
   (cd "$TMP" && grep -E "[[:space:]]\*?$n-linux-$ARCH\$" SHA256SUMS | sha256sum -c --quiet -) || die "checksum mismatch ($n) — nothing installed"
 done
 mkdir -p "$DIR"
-for n in "${NAMES[@]}"; do install -m 755 "$TMP/$n-linux-$ARCH" "$DIR/$n"; done
+# atomic: stage next to the target, then rename (rootwhy-gtk first, so rootwhy never finds the helper missing)
+for n in "${NAMES[@]}"; do
+  STAGED+=("$DIR/.$n.new.$$")
+  install -m 755 "$TMP/$n-linux-$ARCH" "$DIR/.$n.new.$$" || die "cannot write to $DIR"
+done
+if ((GTK)); then mv -f "$DIR/.rootwhy-gtk.new.$$" "$DIR/rootwhy-gtk"; fi
+mv -f "$DIR/.rootwhy.new.$$" "$DIR/rootwhy"
+STAGED=()
 ok "$("$DIR/rootwhy" --version) — checksums OK"
 case ":$PATH:" in *":$DIR:"*) ;; *) warn "$DIR is not in PATH — add it to your shell profile" ;; esac
 
