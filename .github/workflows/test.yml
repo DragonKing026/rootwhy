@@ -1,6 +1,7 @@
+---
 name: test
 
-on:
+"on":
   push:
   pull_request:
 
@@ -9,18 +10,33 @@ permissions:
 
 jobs:
   test:
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
+    # The oldest supported base: glibc 2.35, GTK 4.6 (same as the release).
+    runs-on: ubuntu-22.04
+    timeout-minutes: 20
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # v7.0.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
-      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
-        with:
-          python-version: "3.14"
-      - name: Tests
-        run: python3 -m unittest discover -s tests -v
+      - name: GTK 4 headers
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libgtk-4-dev
+      - name: Rust toolchain
+        run: |
+          rustup toolchain install stable --profile minimal \
+            --component clippy,rustfmt
+          rustup default stable
+      - name: Format
+        run: cargo fmt --check
       - name: Lint
-        run: pipx run ruff==0.17.1 check --select F,E9 rootwhy hooks tests
+        run: cargo clippy --all-targets --locked -- -D warnings
+      - name: Tests
+        run: cargo test --locked
+      - name: Shell
+        run: shellcheck -S warning install.sh
       - name: Plugin manifests are valid JSON
-        run: for f in .claude-plugin/*.json hooks/hooks.json; do python3 -m json.tool "$f" > /dev/null; done
+        run: |
+          for f in .claude-plugin/*.json hooks/hooks.json; do
+            python3 -m json.tool "$f" > /dev/null
+          done
