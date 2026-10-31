@@ -27,7 +27,7 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 zeroize = "1"
 # only rootwhy-gtk uses it; API limited to GTK 4.6 (Ubuntu 22.04)
-gtk4 = { version = "0.9", features = ["v4_6"] }
+gtk4 = { version = "0.11", features = ["v4_6"] }
 
 [profile.release]
 lto = true
