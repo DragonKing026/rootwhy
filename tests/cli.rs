@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Tests of the binary itself (no GTK, no sudo): the Cli cases of tests/test_rootwhy.py and the hook tests of
-// tests/test_hook.py, run against `rootwhy` and `rootwhy hook`.
+// Tests of the binary itself (no GTK, no sudo): command-line parsing, help and error messages, and the hook
+// (`rootwhy hook`), run against the built `rootwhy`.
 use std::io::Write;
 use std::process::{Command, Output, Stdio};
 
