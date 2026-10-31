@@ -1,0 +1,32 @@
+[package]
+name = "rootwhy-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+
+[dependencies.rootwhy]
+path = ".."
+
+# Not part of the root package's build (and `cargo test --locked` there).
+[workspace]
+members = ["."]
+
+[[bin]]
+name = "hook_decide"
+path = "fuzz_targets/hook_decide.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "parse_args"
+path = "fuzz_targets/parse_args.rs"
+test = false
+doc = false
+bench = false
