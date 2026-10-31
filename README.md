@@ -2,6 +2,12 @@
 
 # rootwhy
 
+[![test](https://github.com/DragonKing026/rootwhy/actions/workflows/test.yml/badge.svg)](https://github.com/DragonKing026/rootwhy/actions/workflows/test.yml)
+[![CodeQL](https://github.com/DragonKing026/rootwhy/actions/workflows/codeql.yml/badge.svg)](https://github.com/DragonKing026/rootwhy/actions/workflows/codeql.yml)
+[![security](https://github.com/DragonKing026/rootwhy/actions/workflows/security.yml/badge.svg)](https://github.com/DragonKing026/rootwhy/actions/workflows/security.yml)
+[![release](https://github.com/DragonKing026/rootwhy/actions/workflows/release.yml/badge.svg)](https://github.com/DragonKing026/rootwhy/actions/workflows/release.yml)
+[![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/DragonKing026/rootwhy/badge)](https://scorecard.dev/viewer/?uri=github.com/DragonKing026/rootwhy)
+
 **sudo with a password dialog that says _why_ — and shows what every part of the command does.**
 
 [Polski](README.pl.md)

@@ -1,0 +1,40 @@
+---
+name: codeql
+
+"on":
+  push:
+  pull_request:
+  schedule:
+    - cron: "23 4 * * 1"
+
+permissions:
+  contents: read
+
+jobs:
+  analyze:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        language: [rust, actions]
+    permissions:
+      security-events: write
+      contents: read
+      actions: read
+    steps:
+      # v7.0.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      # v4.38.3
+      - uses: github/codeql-action/init@24c54180a607b1449ed407dd24f251e4e9147c8d
+        with:
+          languages: ${{ matrix.language }}
+          build-mode: none
+      # v4.38.3
+      # yamllint disable-line rule:line-length
+      - uses: github/codeql-action/analyze@24c54180a607b1449ed407dd24f251e4e9147c8d
+        with:
+          category: >-
+            /language:${{ matrix.language }}
