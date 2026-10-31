@@ -80,7 +80,9 @@ case ":$PATH:" in *":$DIR:"*) ;; *) warn "$DIR is not in PATH — add it to your
 # rootwhy-gtk is linked against the system GTK 4 (>= 4.6); without it the dialog falls back to zenity / kdialog
 if ((GTK)); then
   say "GTK 4 for the full dialog (colours and descriptions on hover)"
-  if ldd "$DIR/rootwhy-gtk" 2>/dev/null | grep -q 'not found'; then
+  if ! command -v ldd >/dev/null; then
+    warn "ldd not found — cannot check for GTK 4; without it the dialog uses zenity / kdialog"
+  elif ldd "$DIR/rootwhy-gtk" 2>/dev/null | grep -q 'not found'; then
     warn "GTK 4 (libgtk-4.so.1) or one of its libraries is missing — until you install it, the dialog uses zenity / kdialog"
     echo "  Install GTK 4 for your distribution:"
     echo "    Fedora:           sudo dnf install gtk4"
