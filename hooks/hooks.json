@@ -4,7 +4,7 @@
       {
         "matcher": "Bash",
         "hooks": [
-          { "type": "command", "command": "python3 -I \"${CLAUDE_PLUGIN_ROOT}/hooks/no-bare-sudo.py\"" }
+          { "type": "command", "command": "r=$(command -v rootwhy 2>/dev/null); [ -n \"$r\" ] || r=\"$HOME/.local/bin/rootwhy\"; [ -x \"$r\" ] || exit 0; case $(\"$r\" --version 2>/dev/null) in 'rootwhy 3.'*) exec \"$r\" hook;; esac; exit 0" }
         ]
       }
     ]
