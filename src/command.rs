@@ -10,8 +10,21 @@ pub const ONE_LINE_MAX: usize = 70; // commands up to this many characters stay 
 
 /// Commands whose first argument is a subcommand (shown on the first line).
 const SUBCOMMAND_TOOLS: &[&str] = &[
-    "systemctl", "dnf", "dnf5", "apt", "apt-get", "flatpak", "snap", "tailscale", "docker", "podman", "loginctl",
-    "hostnamectl", "timedatectl", "firewall-cmd", "ufw",
+    "systemctl",
+    "dnf",
+    "dnf5",
+    "apt",
+    "apt-get",
+    "flatpak",
+    "snap",
+    "tailscale",
+    "docker",
+    "podman",
+    "loginctl",
+    "hostnamectl",
+    "timedatectl",
+    "firewall-cmd",
+    "ufw",
 ];
 
 /// Options that take the next argument as their value, when man cannot tell (it is also asked).
@@ -74,13 +87,13 @@ pub enum Role {
 
 #[derive(Clone, Debug)]
 pub struct Token {
-    pub shown: String,  // what the dialog shows (quoted, control characters made visible)
+    pub shown: String, // what the dialog shows (quoted, control characters made visible)
     pub kind: Kind,
     pub arg: String,    // the original argument (for a joined value: just the value)
     pub index: usize,   // position in argv
     pub option: String, // for options and their values: the option name
     pub role: Role,
-    pub joined: bool, // no space before this token (value of --opt=value)
+    pub joined: bool,       // no space before this token (value of --opt=value)
     pub notes: Vec<String>, // tooltip lines — filled by explain()
 }
 
@@ -158,7 +171,10 @@ pub fn shell_quote(s: &str) -> String {
 }
 
 fn looks_like_path(s: &str) -> bool {
-    s.starts_with(['/', '~']) || s.starts_with("./") || s.starts_with("../") || (s.contains('/') && !s.starts_with('-') && !s.contains("://"))
+    s.starts_with(['/', '~'])
+        || s.starts_with("./")
+        || s.starts_with("../")
+        || (s.contains('/') && !s.starts_with('-') && !s.contains("://"))
 }
 
 /// The bare name when sudo would find this very file by it (the full path is in the tooltip); otherwise the path —
@@ -187,10 +203,8 @@ pub fn tokenize(argv: &[String], value_options: Option<&HashSet<String>>) -> Vec
         return Vec::new();
     }
     let cmd = basename(&argv[0]).to_string();
-    let mut takes: HashSet<String> = builtin_value_options()
-        .get(cmd.as_str())
-        .map(|s| s.iter().map(|x| x.to_string()).collect())
-        .unwrap_or_default();
+    let mut takes: HashSet<String> =
+        builtin_value_options().get(cmd.as_str()).map(|s| s.iter().map(|x| x.to_string()).collect()).unwrap_or_default();
     if let Some(extra) = value_options {
         takes.extend(extra.iter().cloned());
     }
@@ -263,15 +277,13 @@ pub fn tokenize(argv: &[String], value_options: Option<&HashSet<String>>) -> Vec
 /// Mark the arguments rootwhy checks for a warning: a destination that gets replaced, a script root will run,
 /// a permission mode, a new owner.
 fn assign_roles(cmd: &str, tokens: &mut [Token]) {
-    let positional: Vec<usize> = tokens
-        .iter()
-        .enumerate()
-        .filter(|(_, t)| matches!(t.kind, Kind::Path | Kind::Arg))
-        .map(|(n, _)| n)
-        .collect();
+    let positional: Vec<usize> =
+        tokens.iter().enumerate().filter(|(_, t)| matches!(t.kind, Kind::Path | Kind::Arg)).map(|(n, _)| n).collect();
     let has_opt = |names: &[&str]| tokens.iter().any(|t| t.kind == Kind::Option && names.contains(&t.option.as_str()));
     let (dest, script) = (
-        matches!(cmd, "cp" | "mv" | "install") && positional.len() > 1 && !has_opt(&["-t", "--target-directory", "-d", "--directory"]),
+        matches!(cmd, "cp" | "mv" | "install")
+            && positional.len() > 1
+            && !has_opt(&["-t", "--target-directory", "-d", "--directory"]),
         matches!(cmd, "bash" | "sh") && !positional.is_empty() && !has_opt(&["-c"]),
     );
     if dest {

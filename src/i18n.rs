@@ -57,17 +57,11 @@ pub const PL: &[(&str, &str)] = &[
     ("Authorize", "Zatwierdź"),
     ("Wrong password — try again (attempt {n}).", "Błędne hasło — spróbuj ponownie (próba {n})."),
     ("Working directory: {d}", "Katalog roboczy: {d}"),
-    (
-        "Requested via: {c} (the programs the request came through)",
-        "Kto prosi: {c} (programy, przez które przyszła prośba)",
-    ),
+    ("Requested via: {c} (the programs the request came through)", "Kto prosi: {c} (programy, przez które przyszła prośba)"),
     ("Preview — nothing will run.", "Podgląd — nic się nie wykona."),
     ("does not exist yet (will be created)", "jeszcze nie istnieje (zostanie utworzony)"),
     ("⚠ does not exist", "⚠ nie istnieje"),
-    (
-        "⚠ does not exist, and neither does its parent directory",
-        "⚠ nie istnieje, nie ma też katalogu nadrzędnego",
-    ),
+    ("⚠ does not exist, and neither does its parent directory", "⚠ nie istnieje, nie ma też katalogu nadrzędnego"),
     ("⚠ not found in sudo's PATH", "⚠ nie ma go w PATH sudo"),
     (
         "⚠ not owned by root or writable by others — could be changed before it runs",
@@ -75,23 +69,14 @@ pub const PL: &[(&str, &str)] = &[
     ),
     ("⚠ an existing file — it will be replaced", "⚠ plik istnieje — zostanie zastąpiony"),
     ("⚠ no such user or group on this system", "⚠ nie ma takiego użytkownika lub grupy w tym systemie"),
-    (
-        "⚠ setuid/setgid bit — runs with the owner's rights",
-        "⚠ bit setuid/setgid — uruchamia się z prawami właściciela",
-    ),
-    (
-        "rootwhy: reason (-r) is required, {a}–{b} characters",
-        "rootwhy: powód (-r) jest wymagany, {a}–{b} znaków",
-    ),
+    ("⚠ setuid/setgid bit — runs with the owner's rights", "⚠ bit setuid/setgid — uruchamia się z prawami właściciela"),
+    ("rootwhy: reason (-r) is required, {a}–{b} characters", "rootwhy: powód (-r) jest wymagany, {a}–{b} znaków"),
     ("rootwhy: no command given", "rootwhy: brak polecenia"),
     ("rootwhy: no graphical session for the dialog", "rootwhy: brak sesji graficznej na okienko"),
     ("rootwhy: cancelled by the user", "rootwhy: anulowane przez użytkownika"),
     ("rootwhy: askpass mode is only for sudo -A", "rootwhy: tryb hasła tylko dla sudo -A"),
     ("rootwhy: command not found: {c}", "rootwhy: nie ma polecenia: {c}"),
-    (
-        "rootwhy: no dialog available (GTK 4, kdialog or zenity)",
-        "rootwhy: brak okienka (GTK 4, kdialog lub zenity)",
-    ),
+    ("rootwhy: no dialog available (GTK 4, kdialog or zenity)", "rootwhy: brak okienka (GTK 4, kdialog lub zenity)"),
 ];
 
 /// Translate a catalogue text (no placeholders).

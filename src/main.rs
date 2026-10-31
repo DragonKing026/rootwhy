@@ -16,6 +16,7 @@ fn main() -> ExitCode {
     if args.first().map(String::as_str) == Some("hook") {
         return ExitCode::from(hook::run() as u8);
     }
-    let code = if std::env::var("ROOTWHY_MODE").as_deref() == Ok("askpass") { modes::askpass_mode() } else { modes::main_mode(&args) };
+    let code =
+        if std::env::var("ROOTWHY_MODE").as_deref() == Ok("askpass") { modes::askpass_mode() } else { modes::main_mode(&args) };
     ExitCode::from((code & 0xff) as u8)
 }

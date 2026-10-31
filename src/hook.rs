@@ -13,8 +13,20 @@ const PREFIXES: [&str; 16] = [
     "exec", "time", "nohup", "command", "builtin", "env", "nice", "!", "{", "if", "then", "else", "elif", "while", "until", "do",
 ];
 const LAUNCHERS: [&str; 14] = [
-    "xargs", "timeout", "stdbuf", "ionice", "setsid", "chrt", "taskset", "flock", "watch", "unbuffer", "systemd-run", "script",
-    "find", "parallel",
+    "xargs",
+    "timeout",
+    "stdbuf",
+    "ionice",
+    "setsid",
+    "chrt",
+    "taskset",
+    "flock",
+    "watch",
+    "unbuffer",
+    "systemd-run",
+    "script",
+    "find",
+    "parallel",
 ];
 const SHELLS: [&str; 5] = ["bash", "sh", "zsh", "dash", "ksh"];
 const PUNCT: &str = ";&|()<>";
@@ -101,9 +113,13 @@ pub fn strip_heredocs(cmd: &str) -> String {
     out.join("\n")
 }
 
+/// The text cannot be split into words (unbalanced quote, trailing backslash).
+#[derive(Debug, PartialEq, Eq)]
+pub struct ParseError;
+
 /// Python's shlex.shlex(text, posix=True, punctuation_chars=";&|()<>") with whitespace_split and no comments.
 /// Err = unbalanced quote or a trailing backslash.
-pub fn shlex_split(text: &str) -> Result<Vec<String>, ()> {
+pub fn shlex_split(text: &str) -> Result<Vec<String>, ParseError> {
     let chars: Vec<char> = text.chars().collect();
     let mut pos = 0;
     let mut tokens = Vec::new();
@@ -143,7 +159,7 @@ pub fn shlex_split(text: &str) -> Result<Vec<String>, ()> {
                 '\'' | '"' => {
                     quoted = true;
                     match next {
-                        None => return Err(()),
+                        None => return Err(ParseError),
                         Some(c) if c == state => state = 'a',
                         Some('\\') if state == '"' => {
                             escaped = state;
@@ -153,7 +169,7 @@ pub fn shlex_split(text: &str) -> Result<Vec<String>, ()> {
                     }
                 }
                 '\\' => match next {
-                    None => return Err(()),
+                    None => return Err(ParseError),
                     Some(c) => {
                         // only the quote itself or the backslash may be escaped within quotes
                         if (escaped == '"' || escaped == '\'') && c != state && c != escaped {
@@ -225,7 +241,7 @@ pub fn blocked_words(cmd: &str, depth: usize) -> BTreeSet<String> {
     if depth > 3 {
         return found;
     }
-    let text = strip_heredocs(cmd).replace('\n', " ; ").replace('`', " ; ").replace("$(", " ; ( ");
+    let text = strip_heredocs(cmd).replace(['\n', '`'], " ; ").replace("$(", " ; ( ");
     let Ok(tokens) = shlex_split(&text) else {
         // unbalanced quotes: fail closed when a name appears at all
         return BLOCKED.iter().filter(|w| mentions(cmd, w)).map(|w| w.to_string()).collect();
@@ -317,11 +333,29 @@ mod tests {
     #[test]
     fn blocks_command_words() {
         for cmd in [
-            "sudo dnf install htop", "cd /tmp && sudo rm x", "ls | sudo tee /etc/x", "FOO=1 sudo true", "/usr/bin/sudo -k true",
-            "pkexec true", "echo $(sudo cat /etc/shadow)", "nohup sudo true &", "doas true", "su -c id", "run0 true",
-            "x=1\nsudo true", "'sudo' true", "s\\udo true", "\"/usr/bin/sudo\" true", "find . | xargs sudo rm",
-            "timeout 5 sudo true", "bash -c \"sudo true\"", "sh -c 'cd / && sudo ls'", "eval \"sudo true\"", "`sudo true`",
-            "{ sudo true; }", "if true; then sudo true; fi",
+            "sudo dnf install htop",
+            "cd /tmp && sudo rm x",
+            "ls | sudo tee /etc/x",
+            "FOO=1 sudo true",
+            "/usr/bin/sudo -k true",
+            "pkexec true",
+            "echo $(sudo cat /etc/shadow)",
+            "nohup sudo true &",
+            "doas true",
+            "su -c id",
+            "run0 true",
+            "x=1\nsudo true",
+            "'sudo' true",
+            "s\\udo true",
+            "\"/usr/bin/sudo\" true",
+            "find . | xargs sudo rm",
+            "timeout 5 sudo true",
+            "bash -c \"sudo true\"",
+            "sh -c 'cd / && sudo ls'",
+            "eval \"sudo true\"",
+            "`sudo true`",
+            "{ sudo true; }",
+            "if true; then sudo true; fi",
             "cat <<EOF\nx\nEOF\nsudo true",    // body ended, next line runs
             "cat <<EOF\n EOF\nEOF\nsudo true", // ' EOF' does not end it, 'EOF' does
             "echo 'unbalanced; sudo true",     // cannot parse -> fail closed
@@ -333,10 +367,20 @@ mod tests {
     #[test]
     fn allows_mentions() {
         for cmd in [
-            "git commit -m \"never call sudo directly\"", "grep -rn sudo README.md", "rootwhy -r 'Why x.' -- dnf up",
-            "cat <<EOF > notes.txt\nsudo is blocked\nEOF\necho ok", "man sudo", "echo 'a; sudo b'",
-            "jako-root -o 'Opis zmiany.' true", "pseudo-cmd", "visudo -c", "cat <<'EOF'\nsudo true\nEOF",
-            "cat <<-EOF\n\tsudo x\n\tEOF\necho ok", "xargs echo sudo-free", "bash -c 'echo hi'", "echo \"$(date)\" # sudo later",
+            "git commit -m \"never call sudo directly\"",
+            "grep -rn sudo README.md",
+            "rootwhy -r 'Why x.' -- dnf up",
+            "cat <<EOF > notes.txt\nsudo is blocked\nEOF\necho ok",
+            "man sudo",
+            "echo 'a; sudo b'",
+            "jako-root -o 'Opis zmiany.' true",
+            "pseudo-cmd",
+            "visudo -c",
+            "cat <<'EOF'\nsudo true\nEOF",
+            "cat <<-EOF\n\tsudo x\n\tEOF\necho ok",
+            "xargs echo sudo-free",
+            "bash -c 'echo hi'",
+            "echo \"$(date)\" # sudo later",
         ] {
             assert_eq!(run_cmd(cmd), 0, "{cmd}");
         }

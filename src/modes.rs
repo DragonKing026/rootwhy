@@ -188,9 +188,10 @@ fn log(log_dir: &Path, reason: &str, command: &str, status: &str) {
 
 /// A fresh private file for the dialog state (mode 0600), like Python's tempfile.mkstemp.
 fn make_state_file() -> std::io::Result<String> {
-    let dir = std::env::var("XDG_RUNTIME_DIR").ok().filter(|d| !d.is_empty()).unwrap_or_else(|| {
-        std::env::var("TMPDIR").ok().filter(|d| !d.is_empty()).unwrap_or_else(|| "/tmp".into())
-    });
+    let dir = std::env::var("XDG_RUNTIME_DIR")
+        .ok()
+        .filter(|d| !d.is_empty())
+        .unwrap_or_else(|| std::env::var("TMPDIR").ok().filter(|d| !d.is_empty()).unwrap_or_else(|| "/tmp".into()));
     for _ in 0..100 {
         let mut rnd = [0u8; 6];
         fs::File::open("/dev/urandom").and_then(|mut f| std::io::Read::read_exact(&mut f, &mut rnd))?;
@@ -239,15 +240,8 @@ pub fn main_mode(args: &[String]) -> i32 {
     }
     let caller = caller_chain(unsafe { libc::getppid() } as u32, 3);
     if ns.preview || !ns.screenshot.is_empty() {
-        let req = Request {
-            reason,
-            argv: ns.command,
-            attempt: 1,
-            cwd: getcwd(),
-            caller,
-            preview: true,
-            screenshot: ns.screenshot,
-        };
+        let req =
+            Request { reason, argv: ns.command, attempt: 1, cwd: getcwd(), caller, preview: true, screenshot: ns.screenshot };
         return match show_dialog(&req) {
             Ok(Some(_)) => 0,
             Ok(None) => 130,
@@ -278,9 +272,11 @@ pub fn main_mode(args: &[String]) -> i32 {
     let log_dir = if !ns.log_dir.is_empty() {
         PathBuf::from(&ns.log_dir)
     } else {
-        let base = std::env::var("XDG_STATE_HOME").ok().filter(|v| !v.is_empty()).map(PathBuf::from).unwrap_or_else(|| {
-            PathBuf::from(home_dir().unwrap_or_else(|| "/".into())).join(".local/state")
-        });
+        let base = std::env::var("XDG_STATE_HOME")
+            .ok()
+            .filter(|v| !v.is_empty())
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from(home_dir().unwrap_or_else(|| "/".into())).join(".local/state"));
         base.join("rootwhy")
     };
     log(&log_dir, &reason, &command_text, "start");

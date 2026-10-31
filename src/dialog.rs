@@ -22,9 +22,24 @@ pub const EXIT_NO_GTK: i32 = 2;
 /// Variables the dialog process keeps; anything else (GI_*, GIO_*, GTK_*, QT_PLUGIN_PATH, LD_*…) could load
 /// foreign code into the process that holds the password.
 pub const SAFE_ENV: &[&str] = &[
-    "DISPLAY", "WAYLAND_DISPLAY", "XAUTHORITY", "XDG_RUNTIME_DIR", "XDG_SESSION_TYPE", "XDG_CURRENT_DESKTOP",
-    "XDG_SESSION_DESKTOP", "DESKTOP_SESSION", "KDE_FULL_SESSION", "KDE_SESSION_VERSION", "DBUS_SESSION_BUS_ADDRESS", "HOME",
-    "USER", "LOGNAME", "LANG", "LANGUAGE", "XCURSOR_THEME", "XCURSOR_SIZE",
+    "DISPLAY",
+    "WAYLAND_DISPLAY",
+    "XAUTHORITY",
+    "XDG_RUNTIME_DIR",
+    "XDG_SESSION_TYPE",
+    "XDG_CURRENT_DESKTOP",
+    "XDG_SESSION_DESKTOP",
+    "DESKTOP_SESSION",
+    "KDE_FULL_SESSION",
+    "KDE_SESSION_VERSION",
+    "DBUS_SESSION_BUS_ADDRESS",
+    "HOME",
+    "USER",
+    "LOGNAME",
+    "LANG",
+    "LANGUAGE",
+    "XCURSOR_THEME",
+    "XCURSOR_SIZE",
 ];
 
 /// The environment the dialog (and the helper) runs with: safe variables, LC_*, ROOTWHY_*, and a fixed PATH.
@@ -87,9 +102,8 @@ fn retry_text(req: &Request) -> String {
 
 /// Tokens of the request with tooltips from the system.
 pub fn explained_tokens(req: &Request) -> Vec<Token> {
-    let extra: Option<HashSet<String>> = req.argv.first().map(|a| {
-        man_info(basename(a)).options.into_iter().filter(|(_, v)| v.0).map(|(k, _)| k).collect()
-    });
+    let extra: Option<HashSet<String>> =
+        req.argv.first().map(|a| man_info(basename(a)).options.into_iter().filter(|(_, v)| v.0).map(|(k, _)| k).collect());
     let mut tokens = tokenize(&req.argv, extra.as_ref());
     explain(&mut tokens, (!req.cwd.is_empty()).then_some(req.cwd.as_str()), true);
     tokens
@@ -152,11 +166,11 @@ fn run_helper(req: &Request) -> Result<Option<Zeroizing<Vec<u8>>>, DialogError> 
     let mut json = Zeroizing::new(serde_json::to_vec(&build_dialog_data(req)).map_err(|e| DialogError::Other(e.to_string()))?);
     let debug = std::env::var_os("ROOTWHY_DEBUG").is_some();
     let mut cmd = Command::new(helper);
-    cmd.env_clear()
-        .envs(safe_environ(std::env::vars()))
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(if debug { Stdio::inherit() } else { Stdio::null() }); // theme warnings are noise in the requester's terminal
+    cmd.env_clear().envs(safe_environ(std::env::vars())).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(if debug {
+        Stdio::inherit()
+    } else {
+        Stdio::null()
+    }); // theme warnings are noise in the requester's terminal
     let mut child = cmd.spawn().map_err(|_| DialogError::Unavailable)?;
     let mut stdin = child.stdin.take().ok_or(DialogError::Unavailable)?;
     let mut stdout = child.stdout.take().ok_or(DialogError::Unavailable)?;
@@ -203,7 +217,17 @@ pub fn fallback_dialog(req: &Request) -> Result<Option<Zeroizing<Vec<u8>>>, Dial
             esc(&req.reason),
             lines.iter().map(|x| esc(x)).collect::<Vec<_>>().join("\n")
         );
-        vec![zenity, "--entry".into(), "--hide-text".into(), "--title".into(), title, "--width".into(), "760".into(), "--text".into(), text]
+        vec![
+            zenity,
+            "--entry".into(),
+            "--hide-text".into(),
+            "--title".into(),
+            title,
+            "--width".into(),
+            "760".into(),
+            "--text".into(),
+            text,
+        ]
     } else {
         return Err(DialogError::Other(tr("rootwhy: no dialog available (GTK 4, kdialog or zenity)")));
     };

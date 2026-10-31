@@ -86,6 +86,7 @@ pub fn parse_man(text: &str) -> ManInfo {
     static GAP: OnceLock<Regex> = OnceLock::new();
     static NAME: OnceLock<Regex> = OnceLock::new();
     static TAIL: OnceLock<Regex> = OnceLock::new();
+    static COMMA: OnceLock<Regex> = OnceLock::new();
 
     let text = clean_man(text);
     let lines = splitlines(&text);
@@ -157,7 +158,7 @@ pub fn parse_man(text: &str) -> ManInfo {
         }
         let mut names: Vec<String> = Vec::new();
         let mut takes = false;
-        for part in Regex::new(r",\s*").unwrap().split(spec) {
+        for part in re(&COMMA, r",\s*").split(spec) {
             let Some(nm) = re(&NAME, r"^(--?[A-Za-z0-9?][\w-]*)(.*)$").captures(py_strip(part)) else { continue };
             names.push(nm[1].to_string());
             let tail = &nm[2];
@@ -178,11 +179,7 @@ const SYSTEM_MAN_DIRS: [&str; 2] = ["/usr/share/man", "/usr/local/share/man"];
 
 /// Man directories nobody but root can change (the directory and every parent).
 fn system_man_dirs() -> Vec<String> {
-    SYSTEM_MAN_DIRS
-        .iter()
-        .filter(|d| crate::util::is_dir(d) && !unsafe_for_root(d))
-        .map(|d| d.to_string())
-        .collect()
+    SYSTEM_MAN_DIRS.iter().filter(|d| crate::util::is_dir(d) && !unsafe_for_root(d)).map(|d| d.to_string()).collect()
 }
 
 /// Run a command with a timeout; returns stdout when it exited with 0.
