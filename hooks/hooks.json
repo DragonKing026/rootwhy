@@ -4,7 +4,7 @@
       {
         "matcher": "Bash",
         "hooks": [
-          { "type": "command", "command": "r=$(command -v rootwhy 2>/dev/null); [ -n \"$r\" ] || r=\"$HOME/.local/bin/rootwhy\"; [ -x \"$r\" ] || exit 0; case $(\"$r\" --version 2>/dev/null) in 'rootwhy 3.'*) exec \"$r\" hook;; esac; exit 0" }
+          { "type": "command", "command": "for r in \"$(command -v rootwhy 2>/dev/null)\" \"$HOME/.local/bin/rootwhy\"; do [ -n \"$r\" ] && [ -x \"$r\" ] || continue; case $(\"$r\" --version 2>/dev/null) in 'rootwhy 3.'*) exec \"$r\" hook;; esac; done; echo \"rootwhy plugin: rootwhy 3.x not found (PATH or ~/.local/bin) — bare sudo is not checked; install: https://github.com/DragonKing026/rootwhy#installation\" >&2; exit 1" }
         ]
       }
     ]

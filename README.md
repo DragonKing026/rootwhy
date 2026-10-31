@@ -56,7 +56,7 @@ is the program itself: it runs `rootwhy hook`.
 ```
 
 The plugin does not install the program — [`install.sh`](#installation) installs both. **Without rootwhy 3.x in `PATH`
-or in `~/.local/bin` the hook does nothing** — bare `sudo` is then not stopped. For other agents put the same rule in
+or in `~/.local/bin` the hook warns** (a one-line message, nothing is blocked) — bare `sudo` is then not stopped. For other agents put the same rule in
 `AGENTS.md`:
 
 ```markdown
@@ -195,7 +195,7 @@ rootwhy 3.0 is a rewrite in Rust with the same behaviour. Differences:
 - GTK 3 is no longer supported (`ROOTWHY_GTK=3` is gone) — GTK 4 ≥ 4.6, or the `zenity` / `kdialog` fallback;
 - command-line arguments must be valid UTF-8;
 - `--help` is printed without colours;
-- the plugin hook runs `rootwhy hook`; it does nothing when rootwhy 3.x is not installed.
+- the plugin hook runs `rootwhy hook`; it warns (without blocking) when rootwhy 3.x is not installed.
 
 ## Language
 

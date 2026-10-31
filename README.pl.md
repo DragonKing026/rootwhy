@@ -56,7 +56,7 @@ program: uruchamia `rootwhy hook`.
 ```
 
 Wtyczka nie instaluje programu — [`install.sh`](#instalacja) instaluje jedno i drugie. **Bez rootwhy 3.x w `PATH` albo
-w `~/.local/bin` hook nic nie robi** — goły `sudo` nie jest wtedy zatrzymywany. Dla innych agentów ta sama reguła w `AGENTS.md`:
+w `~/.local/bin` hook ostrzega** (jedna linia, nic nie blokuje) — goły `sudo` nie jest wtedy zatrzymywany. Dla innych agentów ta sama reguła w `AGENTS.md`:
 
 ```markdown
 Polecenia wymagające roota — tylko przez `rootwhy -r "Co i po co, 1–2 zdania." -- polecenie …`, nigdy `sudo`
@@ -192,7 +192,7 @@ rootwhy 3.0 to przepisanie na Rust z tym samym działaniem. Różnice:
 - GTK 3 nie jest już obsługiwane (`ROOTWHY_GTK=3` nie ma) — GTK 4 ≥ 4.6 albo zapas `zenity` / `kdialog`;
 - argumenty wiersza poleceń muszą być poprawnym UTF-8;
 - `--help` wypisuje się bez kolorów;
-- hook wtyczki uruchamia `rootwhy hook`; bez zainstalowanego rootwhy 3.x nic nie robi.
+- hook wtyczki uruchamia `rootwhy hook`; bez zainstalowanego rootwhy 3.x ostrzega (nie blokuje).
 
 ## Język
 
