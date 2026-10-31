@@ -147,11 +147,11 @@ rootwhy --version
 
 `~/.local/bin` must be in `PATH`.
 
-Releases after v3.0.0 carry a signed build provenance attestation (`rootwhy.intoto.jsonl`, Sigstore). To verify a
+Releases after v3.0.0 carry a signed build provenance attestation (`rootwhy.sigstore.json`, Sigstore). To verify a
 downloaded file (needs the [GitHub CLI](https://cli.github.com/)):
 
 ```bash
-gh attestation verify "rootwhy-linux-$ARCH" --repo DragonKing026/rootwhy --bundle rootwhy.intoto.jsonl
+gh attestation verify "rootwhy-linux-$ARCH" --repo DragonKing026/rootwhy --bundle rootwhy.sigstore.json
 ```
 
 **2. GTK 4** — for the full dialog (colours, descriptions on hover): the system library, version 4.6 or newer.

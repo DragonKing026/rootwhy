@@ -145,11 +145,11 @@ rootwhy --version
 
 `~/.local/bin` musi być w `PATH`.
 
-Wydania po v3.0.0 mają podpisane poświadczenie pochodzenia (`rootwhy.intoto.jsonl`, Sigstore). Weryfikacja pobranego
+Wydania po v3.0.0 mają podpisane poświadczenie pochodzenia (`rootwhy.sigstore.json`, Sigstore). Weryfikacja pobranego
 pliku (potrzebne [GitHub CLI](https://cli.github.com/)):
 
 ```bash
-gh attestation verify "rootwhy-linux-$ARCH" --repo DragonKing026/rootwhy --bundle rootwhy.intoto.jsonl
+gh attestation verify "rootwhy-linux-$ARCH" --repo DragonKing026/rootwhy --bundle rootwhy.sigstore.json
 ```
 
 **2. GTK 4** — dla pełnego okienka (kolory, opisy po najechaniu): biblioteka systemowa w wersji 4.6 lub nowszej.

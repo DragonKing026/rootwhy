@@ -4,7 +4,7 @@ name: release
 # Builds rootwhy and rootwhy-gtk on Ubuntu 22.04 (glibc 2.35, GTK 4.6)
 # for x86_64 and aarch64 and attaches them with SHA256SUMS
 # to a draft GitHub release of the pushed tag, with a build provenance
-# attestation (rootwhy.intoto.jsonl, Sigstore bundle).
+# attestation (rootwhy.sigstore.json, Sigstore bundle).
 "on":
   push:
     tags: ["v*"]
@@ -82,7 +82,7 @@ jobs:
       - name: Provenance bundle as a release file
         env:
           BUNDLE: ${{ steps.attest.outputs.bundle-path }}
-        run: cp "$BUNDLE" dist/rootwhy.intoto.jsonl
+        run: cp "$BUNDLE" dist/rootwhy.sigstore.json
       - name: Create draft release
         env:
           GH_TOKEN: ${{ github.token }}
